@@ -1,8 +1,47 @@
 {
   "name": "opencode-cursor-auth",
-  "module": "index.ts",
+  "version": "0.1.0",
+  "description": "Authentication plugin for Cursor's AI backend, enabling OpenAI-compatible clients to use Cursor's API",
+  "module": "src/index.ts",
+  "main": "src/index.ts",
   "type": "module",
-  "private": true,
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./storage": {
+      "import": "./src/lib/storage.ts",
+      "types": "./src/lib/storage.ts"
+    },
+    "./auth": {
+      "import": "./src/lib/auth/index.ts",
+      "types": "./src/lib/auth/index.ts"
+    },
+    "./jwt": {
+      "import": "./src/lib/utils/jwt.ts",
+      "types": "./src/lib/utils/jwt.ts"
+    },
+    "./plugin": {
+      "import": "./src/plugin/index.ts",
+      "types": "./src/plugin/index.ts"
+    }
+  },
+  "scripts": {
+    "demo": "bun run scripts/auth-demo.ts",
+    "demo:status": "bun run scripts/auth-demo.ts status",
+    "demo:login": "bun run scripts/auth-demo.ts login",
+    "demo:logout": "bun run scripts/auth-demo.ts logout",
+    "test": "bun test"
+  },
+  "keywords": [
+    "cursor",
+    "opencode",
+    "auth",
+    "authentication",
+    "openai",
+    "api"
+  ],
   "devDependencies": {
     "@types/babel__generator": "^7.27.0",
     "@types/bun": "latest"

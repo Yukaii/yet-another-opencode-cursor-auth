@@ -1,8 +1,0 @@
-/* module decorator */module = __webpack_require__.nmd(module);
-try {
-  process.dlopen(module, __webpack_require__("path").join(__dirname, __webpack_require__.p, "merkle-tree-napi.darwin-arm64.node"));
-} catch (error) {
-  throw new Error('node-loader:\n' + error);
-}
-
-/***/

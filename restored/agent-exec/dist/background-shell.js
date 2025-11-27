@@ -1,3 +1,0 @@
-const backgroundShellExecutorResource = createResource(execManager => new ExecutorResource(execManager, createServerSerializer("backgroundShellSpawnArgs"), createClientDeserializer("backgroundShellSpawnResult")), (implementation, controlledExecManager) => {
-  controlledExecManager.register(new SimpleControlledExecHandler(implementation, createServerDeserializer("backgroundShellSpawnArgs"), createClientSerializer("backgroundShellSpawnResult")));
-});

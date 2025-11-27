@@ -41,8 +41,9 @@ Summary of how to call the Cursor API and present it as an OpenAI‐style `/v1/c
   - Store refresh token plus optional API key as `refresh|apiKey` (see `formatRefreshParts`).
 
 ## Practical steps to finish the OpenAI wrapper
-1) Add an OpenAI request shim (similar to Gemini’s `prepareGeminiRequest`) that detects `/v1/chat/completions`, maps messages/model to `ChatRequest`, and chooses streaming vs non‑streaming paths.
-2) Route to `CursorClient.chat`/`chatStream` instead of hitting OpenAI URLs; attach checksum + Cursor headers.
-3) Add a response normalizer that emits OpenAI JSON/SSE shapes from `StreamChunk` output, including proper `id/object/created/model` fields and a final `finish_reason`.
-4) Wire the loader’s `fetch` override to use the shim when the target URL is OpenAI‑style; otherwise fall back to the original fetch.
-5) Keep auth refresh logic intact so tokens remain valid mid‑stream; surface errors in OpenAI error format.
+1) Add an OpenAI request shim (done in `src/lib/api/openai-compat.ts`) that detects `/v1/chat/completions`, maps messages/model to `ChatRequest`, and chooses streaming vs non‑streaming paths. Unsupported `tool_calls/function_call` are rejected with a clear 400 for now. Common model aliases (e.g., `gpt-4`, `gpt-3.5-turbo`) are mapped to Cursor equivalents.
+2) Route to `CursorClient.chat`/`chatStream` instead of hitting OpenAI URLs; attach checksum + Cursor headers (done via `CursorClient`).
+3) Add a response normalizer that emits OpenAI JSON/SSE shapes from `StreamChunk` output, including proper `id/object/created/model` fields and a final `finish_reason` (done).
+4) Wire the loader’s `fetch` override to use the shim when the target URL is OpenAI‑style; otherwise fall back to the original fetch (done in `src/plugin/plugin.ts`).
+5) Keep auth refresh logic intact so tokens remain valid mid‑stream; surface errors in OpenAI error format (done via existing refresh path).
+6) Next work items: consider tool/function-call translation if needed, and propagate any usage tokens if Cursor starts returning them. Model aliasing is currently static; the Cursor CLI can also fetch model lists via `AiService.GetUsableModels`—we can mirror that later for dynamic population.

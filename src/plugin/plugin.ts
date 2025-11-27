@@ -13,6 +13,9 @@ import {
   LoginManager,
   CURSOR_API_BASE_URL,
 } from "../lib/auth/login";
+import { CursorClient } from "../lib/api/cursor-client";
+import { listCursorModels } from "../lib/api/cursor-models";
+import { handleOpenAIChatCompletions } from "../lib/api/openai-compat";
 import { decodeJwtPayload } from "../lib/utils/jwt";
 import { refreshAccessToken } from "../lib/auth/helpers";
 import type {
@@ -138,8 +141,7 @@ function isCursorApiRequest(input: RequestInfo): boolean {
   const url = typeof input === "string" ? input : (input as Request).url;
   return (
     url.includes("cursor.sh") ||
-    url.includes("api.cursor.com") ||
-    url.includes("openai.com") // Cursor uses OpenAI-compatible endpoints
+    url.includes("api.cursor.com")
   );
 }
 
@@ -233,6 +235,26 @@ export const CursorOAuthPlugin = async ({
           }
         }
       }
+      // Optionally populate provider models from Cursor if available.
+      try {
+        const client = new CursorClient(auth.access);
+        const models = await listCursorModels(client);
+        if (models.length > 0) {
+          provider.models = provider.models ?? {};
+          for (const m of models) {
+            const ids = [
+              m.modelId,
+              m.displayModelId,
+              ...(m.aliases ?? []),
+            ].filter((id): id is string => !!id);
+            for (const id of ids) {
+              provider.models[id] = provider.models[id] ?? { cost: { input: 0, output: 0 } };
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("[Cursor OAuth] Failed to list models; continuing with defaults.", error);
+      }
 
       return {
         apiKey: "",
@@ -263,6 +285,16 @@ export const CursorOAuthPlugin = async ({
           const accessToken = authRecord.access;
           if (!accessToken) {
             return fetch(input, init);
+          }
+
+          // Route OpenAI-compatible chat completions through the Cursor client for compatibility.
+          const openaiResponse = await handleOpenAIChatCompletions(
+            input,
+            init,
+            new CursorClient(accessToken)
+          );
+          if (openaiResponse) {
+            return openaiResponse;
           }
 
           // Prepare authenticated request

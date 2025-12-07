@@ -1,7 +1,7 @@
 {
   "name": "opencode-cursor-auth",
   "version": "0.1.0",
-  "description": "Authentication plugin for Cursor's AI backend, enabling OpenAI-compatible clients to use Cursor's API",
+  "description": "OpenCode authentication plugin for Cursor's AI backend, enabling direct access to Cursor's API through OpenCode",
   "module": "src/index.ts",
   "main": "src/index.ts",
   "type": "module",
@@ -32,6 +32,7 @@
     "demo:status": "bun run scripts/auth-demo.ts status",
     "demo:login": "bun run scripts/auth-demo.ts login",
     "demo:logout": "bun run scripts/auth-demo.ts logout",
+    "server": "bun run src/server.ts",
     "test": "bun test"
   },
   "keywords": [
@@ -40,13 +41,17 @@
     "auth",
     "authentication",
     "openai",
-    "api"
+    "api",
+    "plugin"
   ],
   "devDependencies": {
+    "@opencode-ai/plugin": "^0.13.7",
+    "@opencode-ai/sdk": "^0.13.9",
     "@types/babel__generator": "^7.27.0",
     "@types/bun": "latest"
   },
   "peerDependencies": {
+    "@opencode-ai/plugin": "^0.13.7",
     "typescript": "^5"
   },
   "dependencies": {

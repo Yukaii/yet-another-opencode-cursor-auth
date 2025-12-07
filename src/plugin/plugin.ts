@@ -27,6 +27,7 @@ import type {
   OAuthAuthDetails,
   TokenExchangeResult,
   AuthDetails,
+  FetchInput,
 } from "./types";
 
 // --- Constants ---
@@ -135,24 +136,43 @@ async function refreshCursorAccessToken(
 // --- Request Handling ---
 
 /**
+ * Get URL string from FetchInput
+ */
+function getUrlString(input: FetchInput): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  // Request object
+  return (input as Request).url;
+}
+
+/**
  * Check if a request is targeting Cursor's API
  */
-function isCursorApiRequest(input: RequestInfo): boolean {
-  const url = typeof input === "string" ? input : (input as Request).url;
-  return (
-    url.includes("cursor.sh") ||
-    url.includes("api.cursor.com")
-  );
+function isCursorApiRequest(input: FetchInput): boolean {
+  const url = getUrlString(input);
+  return url.includes("cursor.sh") || url.includes("api.cursor.com");
+}
+
+/**
+ * Check if a request is an OpenAI-style chat completions request
+ */
+function isOpenAIChatRequest(input: FetchInput): boolean {
+  const url = getUrlString(input);
+  return url.includes("/v1/chat/completions");
 }
 
 /**
  * Prepare request with Cursor auth headers
  */
 function prepareCursorRequest(
-  input: RequestInfo,
+  input: FetchInput,
   init: RequestInit | undefined,
   accessToken: string
-): { request: RequestInfo; init: RequestInit } {
+): { request: FetchInput; init: RequestInit } {
   const headers = new Headers(init?.headers ?? {});
 
   // Set authorization
@@ -235,33 +255,41 @@ export const CursorOAuthPlugin = async ({
           }
         }
       }
+
       // Optionally populate provider models from Cursor if available.
-      try {
-        const client = new CursorClient(auth.access);
-        const models = await listCursorModels(client);
-        if (models.length > 0) {
-          provider.models = provider.models ?? {};
-          for (const m of models) {
-            const ids = [
-              m.modelId,
-              m.displayModelId,
-              ...(m.aliases ?? []),
-            ].filter((id): id is string => !!id);
-            for (const id of ids) {
-              provider.models[id] = provider.models[id] ?? { cost: { input: 0, output: 0 } };
+      if (auth.access) {
+        try {
+          const cursorClient = new CursorClient(auth.access);
+          const models = await listCursorModels(cursorClient);
+          if (models.length > 0) {
+            provider.models = provider.models ?? {};
+            for (const m of models) {
+              const ids = [
+                m.modelId,
+                m.displayModelId,
+                ...(m.aliases ?? []),
+              ].filter((id): id is string => !!id);
+              for (const id of ids) {
+                provider.models[id] = provider.models[id] ?? {
+                  cost: { input: 0, output: 0 },
+                };
+              }
             }
           }
+        } catch (error) {
+          console.warn(
+            "[Cursor OAuth] Failed to list models; continuing with defaults.",
+            error
+          );
         }
-      } catch (error) {
-        console.warn("[Cursor OAuth] Failed to list models; continuing with defaults.", error);
       }
 
       return {
         apiKey: "",
 
-        async fetch(input, init) {
+        async fetch(input: FetchInput, init?: RequestInit): Promise<Response> {
           // Skip non-Cursor requests
-          if (!isCursorApiRequest(input)) {
+          if (!isCursorApiRequest(input) && !isOpenAIChatRequest(input)) {
             return fetch(input, init);
           }
 
@@ -278,7 +306,9 @@ export const CursorOAuthPlugin = async ({
               authRecord = refreshed;
             } else {
               // Token refresh failed, try with existing token
-              console.warn("[Cursor OAuth] Token refresh failed, using existing token");
+              console.warn(
+                "[Cursor OAuth] Token refresh failed, using existing token"
+              );
             }
           }
 
@@ -288,13 +318,15 @@ export const CursorOAuthPlugin = async ({
           }
 
           // Route OpenAI-compatible chat completions through the Cursor client for compatibility.
-          const openaiResponse = await handleOpenAIChatCompletions(
-            input,
-            init,
-            new CursorClient(accessToken)
-          );
-          if (openaiResponse) {
-            return openaiResponse;
+          if (isOpenAIChatRequest(input)) {
+            const openaiResponse = await handleOpenAIChatCompletions(
+              getUrlString(input),
+              init,
+              new CursorClient(accessToken)
+            );
+            if (openaiResponse) {
+              return openaiResponse;
+            }
           }
 
           // Prepare authenticated request
@@ -315,9 +347,15 @@ export const CursorOAuthPlugin = async ({
         type: "oauth",
         authorize: async () => {
           console.log("\n=== Cursor OAuth Setup ===");
-          console.log("1. You'll be asked to sign in to your Cursor account.");
-          console.log("2. After signing in, the authentication will complete automatically.");
-          console.log("3. Return to this terminal when you see confirmation.\n");
+          console.log(
+            "1. You'll be asked to sign in to your Cursor account."
+          );
+          console.log(
+            "2. After signing in, the authentication will complete automatically."
+          );
+          console.log(
+            "3. Return to this terminal when you see confirmation.\n"
+          );
 
           const loginManager = new LoginManager();
           const { metadata, loginUrl } = loginManager.startLogin();
@@ -333,7 +371,9 @@ export const CursorOAuthPlugin = async ({
                 try {
                   await openBrowser(loginUrl);
                 } catch {
-                  console.log("Could not open browser automatically. Please visit the URL above.");
+                  console.log(
+                    "Could not open browser automatically. Please visit the URL above."
+                  );
                 }
 
                 // Wait for authentication
@@ -364,7 +404,8 @@ export const CursorOAuthPlugin = async ({
               } catch (error) {
                 return {
                   type: "failed",
-                  error: error instanceof Error ? error.message : "Unknown error",
+                  error:
+                    error instanceof Error ? error.message : "Unknown error",
                 };
               }
             },

@@ -26,8 +26,9 @@ function resolveModelName(model: unknown): string {
 /**
  * Detects OpenAI-style chat completion requests.
  */
-export function isOpenAIChatCompletionsRequest(input: RequestInfo): input is string {
-  return typeof input === "string" && /\/v1\/chat\/completions/.test(input);
+export function isOpenAIChatCompletionsRequest(input: string | Request | URL): input is string {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+  return /\/v1\/chat\/completions/.test(url);
 }
 
 /**
@@ -211,11 +212,12 @@ async function streamCursorAsOpenAI(
  * Returns a Response when the request is handled; otherwise returns null.
  */
 export async function handleOpenAIChatCompletions(
-  input: RequestInfo,
+  input: string | Request | URL,
   init: RequestInit | undefined,
   client: CursorClient
 ): Promise<Response | null> {
-  if (!isOpenAIChatCompletionsRequest(input)) {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+  if (!isOpenAIChatCompletionsRequest(url)) {
     return null;
   }
 

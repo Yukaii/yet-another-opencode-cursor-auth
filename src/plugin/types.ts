@@ -1,8 +1,8 @@
 /**
  * OpenCode Plugin Types
  *
- * Type definitions for the OpenCode plugin system, following the
- * architecture established by opencode-gemini-auth.
+ * Type definitions for the OpenCode plugin system.
+ * These types mirror the @opencode-ai/plugin interface.
  */
 
 // --- Auth Details ---
@@ -24,7 +24,11 @@ export interface TokenAuthDetails {
   token: string;
 }
 
-export type AuthDetails = OAuthAuthDetails | ApiKeyAuthDetails | TokenAuthDetails | { type: string; [key: string]: unknown };
+export type AuthDetails =
+  | OAuthAuthDetails
+  | ApiKeyAuthDetails
+  | TokenAuthDetails
+  | { type: string; [key: string]: unknown };
 
 export type GetAuth = () => Promise<AuthDetails>;
 
@@ -39,14 +43,22 @@ export interface ProviderModel {
 }
 
 export interface Provider {
-  models?: Record<string, ProviderModel>;
+  id?: string;
+  name?: string;
+  models?: Record<string, ProviderModel | undefined>;
 }
 
 // --- Loader ---
 
+/**
+ * RequestInfo type for fetch-like functions
+ */
+export type FetchInput = Request | string | URL;
+
 export interface LoaderResult {
-  apiKey: string;
-  fetch(input: RequestInfo, init?: RequestInit): Promise<Response>;
+  apiKey?: string;
+  baseURL?: string;
+  fetch?(input: FetchInput, init?: RequestInit): Promise<Response>;
 }
 
 // --- Auth Methods ---
@@ -60,7 +72,7 @@ export interface TokenExchangeSuccess {
 
 export interface TokenExchangeFailure {
   type: "failed";
-  error: string;
+  error?: string;
 }
 
 export type TokenExchangeResult = TokenExchangeSuccess | TokenExchangeFailure;
@@ -103,10 +115,17 @@ export interface PluginContext {
 export interface PluginResult {
   auth: {
     provider: string;
-    loader: (getAuth: GetAuth, provider: Provider) => Promise<LoaderResult | null>;
+    loader: (
+      getAuth: GetAuth,
+      provider: Provider
+    ) => Promise<LoaderResult | null>;
     methods: AuthMethod[];
   };
 }
+
+// --- Plugin Function ---
+
+export type Plugin = (context: PluginContext) => Promise<PluginResult>;
 
 // --- Internal Types ---
 

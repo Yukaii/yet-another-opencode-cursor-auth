@@ -716,6 +716,56 @@ export interface McpExecRequest {
 }
 
 /**
+ * Shell execution request (shell_args or shell_stream_args)
+ */
+export interface ShellExecRequest {
+  type: 'shell';
+  id: number;
+  execId?: string;
+  command: string;
+  cwd?: string;
+}
+
+/**
+ * LS (directory listing) request
+ */
+export interface LsExecRequest {
+  type: 'ls';
+  id: number;
+  execId?: string;
+  path: string;
+}
+
+/**
+ * Request context request
+ */
+export interface RequestContextExecRequest {
+  type: 'request_context';
+  id: number;
+  execId?: string;
+}
+
+/**
+ * Read file request
+ */
+export interface ReadExecRequest {
+  type: 'read';
+  id: number;
+  execId?: string;
+  path: string;
+}
+
+/**
+ * Union type for all exec requests
+ */
+export type ExecRequest = 
+  | (McpExecRequest & { type: 'mcp' })
+  | ShellExecRequest 
+  | LsExecRequest 
+  | RequestContextExecRequest
+  | ReadExecRequest;
+
+/**
  * Parse google.protobuf.Value from protobuf bytes
  */
 function parseProtobufValue(data: Uint8Array): any {
@@ -874,40 +924,128 @@ const EXEC_MESSAGE_TYPES: Record<number, string> = {
 };
 
 /**
- * Parse ExecServerMessage to extract mcp_args
+ * Parse shell_args or shell_stream_args
+ * ShellArgs:
+ *   field 1: command (string)
+ *   field 2: working_directory (string)
+ */
+function parseShellArgs(data: Uint8Array): { command: string; cwd?: string } {
+  const fields = parseProtoFields(data);
+  let command = '';
+  let cwd: string | undefined;
+  
+  for (const field of fields) {
+    if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
+      command = new TextDecoder().decode(field.value);
+    } else if (field.fieldNumber === 2 && field.wireType === 2 && field.value instanceof Uint8Array) {
+      cwd = new TextDecoder().decode(field.value);
+    }
+  }
+  
+  return { command, cwd };
+}
+
+/**
+ * Parse ls_args
+ * LsArgs:
+ *   field 1: path (string)
+ */
+function parseLsArgs(data: Uint8Array): { path: string } {
+  const fields = parseProtoFields(data);
+  let path = process.cwd();
+  
+  for (const field of fields) {
+    if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
+      path = new TextDecoder().decode(field.value);
+    }
+  }
+  
+  return { path };
+}
+
+/**
+ * Parse read_args
+ * ReadArgs:
+ *   field 1: path (string)
+ */
+function parseReadArgs(data: Uint8Array): { path: string } {
+  const fields = parseProtoFields(data);
+  let path = '';
+  
+  for (const field of fields) {
+    if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
+      path = new TextDecoder().decode(field.value);
+    }
+  }
+  
+  return { path };
+}
+
+/**
+ * Parse ExecServerMessage to extract all exec types
  * ExecServerMessage:
  *   field 1: id (uint32)
  *   field 15: exec_id (string)
- *   field 11: mcp_args (McpArgs) - oneof message
+ *   field 2: shell_args (ShellArgs)
+ *   field 8: ls_args (LsArgs)
+ *   field 10: request_context_args (RequestContextArgs)
+ *   field 11: mcp_args (McpArgs)
+ *   field 14: shell_stream_args (ShellArgs)
  */
-function parseExecServerMessage(data: Uint8Array): McpExecRequest | null {
+function parseExecServerMessage(data: Uint8Array): ExecRequest | null {
   const fields = parseProtoFields(data);
   let id = 0;
   let execId: string | undefined = undefined;
-  let mcpArgs: Omit<McpExecRequest, 'id' | 'execId'> | null = null;
-  let execType: string | null = null;
+  let result: ExecRequest | null = null;
   
+  // First pass: get id and execId
   for (const field of fields) {
     if (field.fieldNumber === 1 && field.wireType === 0) {
       id = field.value as number;
     } else if (field.fieldNumber === 15 && field.wireType === 2 && field.value instanceof Uint8Array) {
       execId = new TextDecoder().decode(field.value);
-    } else if (field.fieldNumber === 11 && field.wireType === 2 && field.value instanceof Uint8Array) {
-      // mcp_args
-      execType = "mcp_args";
-      mcpArgs = parseMcpArgs(field.value);
-    } else if (EXEC_MESSAGE_TYPES[field.fieldNumber] !== undefined) {
-      // Log other exec message types
-      execType = EXEC_MESSAGE_TYPES[field.fieldNumber] ?? null;
-      console.log(`[DEBUG] ExecServerMessage type: ${execType} (field ${field.fieldNumber}), id: ${id}`);
     }
   }
   
-  if (mcpArgs) {
-    return { id, execId, ...mcpArgs };
+  // Second pass: get the exec type
+  for (const field of fields) {
+    if (field.wireType !== 2 || !(field.value instanceof Uint8Array)) continue;
+    
+    switch (field.fieldNumber) {
+      case 2: // shell_args
+      case 14: { // shell_stream_args
+        const shellArgs = parseShellArgs(field.value);
+        result = { type: 'shell', id, execId, command: shellArgs.command, cwd: shellArgs.cwd };
+        break;
+      }
+      case 7: { // read_args
+        const readArgs = parseReadArgs(field.value);
+        result = { type: 'read', id, execId, path: readArgs.path };
+        break;
+      }
+      case 8: { // ls_args
+        const lsArgs = parseLsArgs(field.value);
+        result = { type: 'ls', id, execId, path: lsArgs.path };
+        break;
+      }
+      case 10: { // request_context_args
+        result = { type: 'request_context', id, execId };
+        break;
+      }
+      case 11: { // mcp_args
+        const mcpArgs = parseMcpArgs(field.value);
+        result = { type: 'mcp', id, execId, ...mcpArgs };
+        break;
+      }
+    }
+    
+    if (result) {
+      console.log(`[DEBUG] Parsed ExecServerMessage: type=${result.type}, id=${id}`);
+      break;
+    }
   }
   
-  return null;
+  return result;
 }
 
 // --- Exec Response Builders ---
@@ -1029,6 +1167,172 @@ function buildExecClientControlMessage(id: number): Uint8Array {
  */
 function buildAgentClientMessageWithExec(execClientMessage: Uint8Array): Uint8Array {
   return encodeMessageField(2, execClientMessage);
+}
+
+/**
+ * Build ShellResult message with proper nested structure
+ * ShellResult:
+ *   field 1: success (ShellSuccess) - oneof result
+ *   field 2: failure (ShellFailure) - oneof result
+ * ShellSuccess/ShellFailure:
+ *   field 1: command (string)
+ *   field 2: working_directory (string)
+ *   field 3: exit_code (int32)
+ *   field 4: signal (string)
+ *   field 5: stdout (string)
+ *   field 6: stderr (string)
+ *   field 7: execution_time (int32) - optional
+ */
+function encodeShellResult(command: string, cwd: string, stdout: string, stderr: string, exitCode: number, executionTimeMs?: number): Uint8Array {
+  // Build ShellSuccess or ShellFailure (same structure, different field number in result)
+  const shellOutcome = concatBytes(
+    encodeStringField(1, command),
+    encodeStringField(2, cwd),
+    encodeInt32Field(3, exitCode),
+    encodeStringField(4, ""),  // signal (empty)
+    encodeStringField(5, stdout),
+    encodeStringField(6, stderr),
+    executionTimeMs ? encodeInt32Field(7, executionTimeMs) : new Uint8Array(0),
+  );
+  
+  // Wrap in ShellResult - field 1 for success, field 2 for failure
+  const resultField = exitCode === 0 ? 1 : 2;
+  return encodeMessageField(resultField, shellOutcome);
+}
+
+/**
+ * Build ExecClientMessage with shell_result
+ * ExecClientMessage:
+ *   field 1: id (uint32)
+ *   field 15: exec_id (string) - optional
+ *   field 2: shell_result (ShellResult) - oneof message
+ */
+function buildExecClientMessageWithShellResult(
+  id: number, 
+  execId: string | undefined, 
+  command: string,
+  cwd: string,
+  stdout: string, 
+  stderr: string,
+  exitCode: number,
+  executionTimeMs?: number
+): Uint8Array {
+  const parts: Uint8Array[] = [];
+  parts.push(encodeUint32Field(1, id));
+  if (execId) {
+    parts.push(encodeStringField(15, execId));
+  }
+  parts.push(encodeMessageField(2, encodeShellResult(command, cwd, stdout, stderr, exitCode, executionTimeMs)));
+  return concatBytes(...parts);
+}
+
+/**
+ * Build LsResult message
+ * LsResult:
+ *   field 1: success (LsSuccess) - oneof result
+ * LsSuccess:
+ *   field 1: files_string (string)
+ */
+function encodeLsResult(filesString: string): Uint8Array {
+  const lsSuccess = encodeStringField(1, filesString);
+  return encodeMessageField(1, lsSuccess);
+}
+
+/**
+ * Build ExecClientMessage with ls_result
+ * ExecClientMessage:
+ *   field 1: id (uint32)
+ *   field 15: exec_id (string) - optional
+ *   field 8: ls_result (LsResult) - oneof message
+ */
+function buildExecClientMessageWithLsResult(id: number, execId: string | undefined, filesString: string): Uint8Array {
+  const parts: Uint8Array[] = [];
+  parts.push(encodeUint32Field(1, id));
+  if (execId) {
+    parts.push(encodeStringField(15, execId));
+  }
+  parts.push(encodeMessageField(8, encodeLsResult(filesString)));
+  return concatBytes(...parts);
+}
+
+/**
+ * Build RequestContextResult message
+ * RequestContextResult:
+ *   field 1: success (RequestContextSuccess) - oneof result
+ * RequestContextSuccess:
+ *   field 1: request_context (RequestContext)
+ * RequestContext:
+ *   field 4: env (RequestContextEnv)
+ */
+function encodeRequestContextResult(): Uint8Array {
+  const cwd = process.cwd();
+  const osVersion = `darwin ${require('os').release()}`;
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const shell = process.env.SHELL || '/bin/zsh';
+  
+  // RequestContextEnv
+  const env = concatBytes(
+    encodeStringField(1, osVersion),
+    encodeStringField(2, cwd),
+    encodeStringField(3, shell),
+    encodeStringField(10, timeZone),
+    encodeStringField(11, cwd),
+  );
+  
+  // RequestContext
+  const requestContext = encodeMessageField(4, env);
+  
+  // RequestContextSuccess
+  const success = encodeMessageField(1, requestContext);
+  
+  // RequestContextResult
+  return encodeMessageField(1, success);
+}
+
+/**
+ * Build ExecClientMessage with request_context_result
+ * ExecClientMessage:
+ *   field 1: id (uint32)
+ *   field 15: exec_id (string) - optional
+ *   field 10: request_context_result (RequestContextResult) - oneof message
+ */
+function buildExecClientMessageWithRequestContextResult(id: number, execId: string | undefined): Uint8Array {
+  const parts: Uint8Array[] = [];
+  parts.push(encodeUint32Field(1, id));
+  if (execId) {
+    parts.push(encodeStringField(15, execId));
+  }
+  parts.push(encodeMessageField(10, encodeRequestContextResult()));
+  return concatBytes(...parts);
+}
+
+/**
+ * Build ReadResult message
+ * ReadResult:
+ *   field 1: success (ReadSuccess) - oneof result
+ * ReadSuccess:
+ *   field 1: content (string)
+ */
+function encodeReadResult(content: string): Uint8Array {
+  const readSuccess = encodeStringField(1, content);
+  return encodeMessageField(1, readSuccess);
+}
+
+/**
+ * Build ExecClientMessage with read_result
+ * ExecClientMessage:
+ *   field 1: id (uint32)
+ *   field 15: exec_id (string) - optional
+ *   field 7: read_result (ReadResult) - oneof message
+ */
+function buildExecClientMessageWithReadResult(id: number, execId: string | undefined, content: string): Uint8Array {
+  const parts: Uint8Array[] = [];
+  parts.push(encodeUint32Field(1, id));
+  if (execId) {
+    parts.push(encodeStringField(15, execId));
+  }
+  parts.push(encodeMessageField(7, encodeReadResult(content)));
+  return concatBytes(...parts);
 }
 
 /**
@@ -1185,7 +1489,7 @@ export interface AgentStreamChunk {
   error?: string;
   toolCall?: ToolCallInfo;
   partialArgs?: string;   // For partial_tool_call updates
-  execRequest?: McpExecRequest;  // For exec_request chunks - tool execution needed
+  execRequest?: ExecRequest;  // For exec_request chunks - tool execution needed
 }
 
 // --- Agent Service Client ---
@@ -1342,11 +1646,11 @@ export class AgentServiceClient {
   }
 
   /**
-   * Send a tool result back to the server
+   * Send a tool result back to the server (for MCP tools only)
    * This must be called during an active chat stream when an exec_request chunk is received
    */
   async sendToolResult(
-    execRequest: McpExecRequest,
+    execRequest: McpExecRequest & { type: 'mcp' },
     result: { success?: { content: string; isError?: boolean }; error?: string }
   ): Promise<void> {
     if (!this.currentRequestId) {
@@ -1377,6 +1681,83 @@ export class AgentServiceClient {
     this.currentAppendSeqno++;
     
     console.log("[DEBUG] Stream close sent for exec id:", execRequest.id);
+  }
+
+  /**
+   * Send a shell execution result back to the server
+   */
+  async sendShellResult(
+    id: number, 
+    execId: string | undefined, 
+    command: string,
+    cwd: string,
+    stdout: string, 
+    stderr: string,
+    exitCode: number,
+    executionTimeMs?: number
+  ): Promise<void> {
+    if (!this.currentRequestId) {
+      throw new Error("No active chat stream - cannot send shell result");
+    }
+    
+    console.log("[DEBUG] Sending shell result for id:", id, "exitCode:", exitCode);
+    
+    const execClientMsg = buildExecClientMessageWithShellResult(id, execId, command, cwd, stdout, stderr, exitCode, executionTimeMs);
+    const responseMsg = buildAgentClientMessageWithExec(execClientMsg);
+    
+    await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, responseMsg);
+    this.currentAppendSeqno++;
+  }
+
+  /**
+   * Send an LS result back to the server
+   */
+  async sendLsResult(id: number, execId: string | undefined, filesString: string): Promise<void> {
+    if (!this.currentRequestId) {
+      throw new Error("No active chat stream - cannot send ls result");
+    }
+    
+    console.log("[DEBUG] Sending ls result for id:", id);
+    
+    const execClientMsg = buildExecClientMessageWithLsResult(id, execId, filesString);
+    const responseMsg = buildAgentClientMessageWithExec(execClientMsg);
+    
+    await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, responseMsg);
+    this.currentAppendSeqno++;
+  }
+
+  /**
+   * Send a request context result back to the server
+   */
+  async sendRequestContextResult(id: number, execId: string | undefined): Promise<void> {
+    if (!this.currentRequestId) {
+      throw new Error("No active chat stream - cannot send request context result");
+    }
+    
+    console.log("[DEBUG] Sending request context result for id:", id);
+    
+    const execClientMsg = buildExecClientMessageWithRequestContextResult(id, execId);
+    const responseMsg = buildAgentClientMessageWithExec(execClientMsg);
+    
+    await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, responseMsg);
+    this.currentAppendSeqno++;
+  }
+
+  /**
+   * Send a file read result back to the server
+   */
+  async sendReadResult(id: number, execId: string | undefined, content: string): Promise<void> {
+    if (!this.currentRequestId) {
+      throw new Error("No active chat stream - cannot send read result");
+    }
+    
+    console.log("[DEBUG] Sending read result for id:", id);
+    
+    const execClientMsg = buildExecClientMessageWithReadResult(id, execId, content);
+    const responseMsg = buildAgentClientMessageWithExec(execClientMsg);
+    
+    await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, responseMsg);
+    this.currentAppendSeqno++;
   }
 
   /**
@@ -1625,6 +2006,8 @@ export class AgentServiceClient {
                 }
                 
                 // field 3 = conversation_checkpoint_update (completion signal)
+                // NOTE: Checkpoint does NOT mean we're done! exec_server_message can come AFTER checkpoint.
+                // Only end on turn_ended (field 14 in interaction_update) or stream close.
                 if (field.fieldNumber === 3 && field.wireType === 2 && field.value instanceof Uint8Array) {
                   console.log("[DEBUG] Received checkpoint, data length:", field.value.length);
                   // Try to parse checkpoint to see what it contains
@@ -1641,25 +2024,30 @@ export class AgentServiceClient {
                     }
                   }
                   yield { type: "checkpoint" };
-                  turnEnded = true;
+                  // DO NOT set turnEnded here - exec messages may follow!
                 }
                 
                 // field 2 = exec_server_message (tool execution request)
                 if (field.fieldNumber === 2 && field.wireType === 2 && field.value instanceof Uint8Array) {
                   console.log("[DEBUG] Received exec_server_message (field 2), length:", field.value.length);
                   
-                  // Parse the ExecServerMessage to extract mcp_args
+                  // Parse the ExecServerMessage
                   const execRequest = parseExecServerMessage(field.value);
                   
                   if (execRequest) {
-                    console.log("[DEBUG] Parsed MCP exec request:", {
-                      id: execRequest.id,
-                      name: execRequest.name,
-                      toolName: execRequest.toolName,
-                      providerIdentifier: execRequest.providerIdentifier,
-                      toolCallId: execRequest.toolCallId,
-                      args: execRequest.args,
-                    });
+                    // Log based on type
+                    if (execRequest.type === 'mcp') {
+                      console.log("[DEBUG] Parsed MCP exec request:", {
+                        id: execRequest.id,
+                        name: execRequest.name,
+                        toolName: execRequest.toolName,
+                        providerIdentifier: execRequest.providerIdentifier,
+                        toolCallId: execRequest.toolCallId,
+                        args: execRequest.args,
+                      });
+                    } else {
+                      console.log(`[DEBUG] Parsed ${execRequest.type} exec request:`, execRequest);
+                    }
                     
                     // Yield exec_request chunk for the server to handle
                     yield {
@@ -1669,7 +2057,7 @@ export class AgentServiceClient {
                   } else {
                     // Log other exec types we don't handle yet
                     const execFields = parseProtoFields(field.value);
-                    console.log("[DEBUG] exec_server_message fields (non-MCP):", execFields.map(f => `field${f.fieldNumber}`).join(", "));
+                    console.log("[DEBUG] exec_server_message fields (unhandled):", execFields.map(f => `field${f.fieldNumber}`).join(", "));
                   }
                 }
                 

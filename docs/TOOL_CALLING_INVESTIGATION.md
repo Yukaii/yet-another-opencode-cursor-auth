@@ -1,7 +1,25 @@
 # Tool Calling Investigation Summary
 
 **Date**: December 8, 2025  
-**Status**: In Progress - Architecture decision needed
+**Status**: ✅ BREAKTHROUGH - Exec flow working! Integration pending
+
+## Latest Status (Session 5)
+
+### Major Breakthrough
+The exec flow is now **fully working** in the test script! We can:
+1. Receive `exec_server_message` requests from Cursor
+2. Execute local commands (shell, ls)
+3. Send results back via `BidiAppend`
+
+### Root Cause Fixed
+The "Conversation state is required" error was caused by `encodeMessageField` skipping empty fields. The server **requires** field 1 (`conversation_state_structure`) to be present even if empty (`0a 00` bytes).
+
+### Working Test Script
+`/scripts/test-exec-flow.ts` successfully:
+- Connects via bidirectional streaming (RunSSE + BidiAppend)
+- Handles `kv_server_message` (get/set blob)
+- Receives `exec_server_message` (ls_args, shell_stream_args)
+- Executes commands locally and returns results
 
 ## Overview
 
@@ -508,6 +526,104 @@ if (field.fieldNumber === 2 && field.wireType === 2 && field.value instanceof Ui
 - Tool execution handling: `cursor-agent-restored-source-code/local-exec/dist/mcp.js:794-953`
 - Exec controller: `cursor-agent-restored-source-code/agent-exec/dist/controlled.js:173-260`
 - Connect stream splitter: `cursor-agent-restored-source-code/agent-client/dist/connect.js:162-222`
+
+## Working Message Structure (Critical!)
+
+### AgentClientMessage for Initial Request
+```
+AgentClientMessage {
+  field 1: AgentRunRequest {
+    field 1: ConversationStateStructure  // MUST be present even if empty = "0a 00"
+    field 2: ConversationAction {
+      field 1: UserMessageAction {
+        field 1: UserMessage { prompt, message_id, mode=1 }
+        field 2: RequestContext (REQUIRED!) {
+          field 4: env { os_version, workspace_paths, shell, time_zone, project_folder }
+        }
+      }
+    }
+    field 3: ModelDetails { model_name="gpt-4o" }
+    field 5: conversation_id
+  }
+}
+```
+
+### ExecClientMessage for Shell Results
+```
+AgentClientMessage {
+  field 2: ExecClientMessage {
+    field 1: id (uint32) - must match ExecServerMessage.id
+    field 15: exec_id (string) - must match ExecServerMessage.exec_id
+    field 2: ShellResult {
+      field 1: stdout (string)
+      field 2: exit_code (int32)
+    }
+  }
+}
+```
+
+### ExecClientMessage for LsResult
+```
+AgentClientMessage {
+  field 2: ExecClientMessage {
+    field 1: id
+    field 15: exec_id
+    field 8: LsResult {
+      field 1: LsSuccess {
+        field 1: files_string (string)
+        // OR field 2: tree (LsDirectoryTreeNode) - preferred but complex
+      }
+    }
+  }
+}
+```
+
+### KvClientMessage for Blob Operations
+```
+AgentClientMessage {
+  field 3: KvClientMessage {
+    field 1: id (uint32)
+    field 2: GetBlobResult { } - empty for not found
+    field 3: SetBlobResult { } - empty for success
+  }
+}
+```
+
+## Server Message Flow Observed
+
+```
+Client                                     Server
+  |                                          |
+  |--- RunSSE (BidiRequestId) -------------->|
+  |--- BidiAppend (AgentRunRequest) -------->|
+  |                                          |
+  |<--- kv_server_message (set_blob_args) ---|  Server stores state
+  |--- kv_client_message (set_blob_result)-->|
+  |                                          |
+  |<--- interaction_update (text_delta) -----|  AI starts talking
+  |                                          |
+  |<--- exec_server_message (ls_args) -------|  Tool execution request
+  |--- exec_client_message (ls_result) ----->|  Tool result
+  |                                          |
+  |<--- interaction_update (more text) ------|  AI continues
+  |                                          |
+  |<--- checkpoint_update -------------------|  Complete
+```
+
+## Remaining Issues
+
+1. **LsResult format** - Currently sending simple string in `files_string`, server may prefer `LsDirectoryTreeNode` tree structure
+2. **Heartbeat handling** - Server sends heartbeats, we acknowledge but may need better handling
+3. **Integration** - Test script works, needs to be integrated into `agent-service.ts`
+
+## Next Steps
+
+1. ✅ Fix empty conversation_state encoding (done)
+2. ✅ Add RequestContext to initial message (done)
+3. ✅ Handle exec_server_message (done)
+4. ⬜ Implement proper LsDirectoryTreeNode format
+5. ⬜ Integrate exec handling into agent-service.ts
+6. ⬜ Test MCP tool calls (mcp_args) - different from built-in tools
 
 ## Environment
 

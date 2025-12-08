@@ -1380,6 +1380,65 @@ const TOOL_FIELD_MAP: Record<number, { type: string; name: string }> = {
 };
 
 /**
+ * Argument field mappings for each tool type
+ * Maps protobuf field numbers to OpenAI-compatible argument names
+ */
+const TOOL_ARG_SCHEMA: Record<string, Record<number, string>> = {
+  // ShellToolCall: field 1 = command, field 2 = thought, field 3 = working_directory
+  "shell_tool_call": { 1: "command", 2: "description", 3: "working_directory" },
+  // DeleteToolCall: field 1 = path
+  "delete_tool_call": { 1: "filePath" },
+  // GlobToolCall: field 1 = pattern, field 2 = path
+  "glob_tool_call": { 1: "pattern", 2: "path" },
+  // GrepToolCall: field 1 = pattern, field 2 = path, field 3 = include
+  "grep_tool_call": { 1: "pattern", 2: "path", 3: "include" },
+  // ReadToolCall: field 1 = path, field 2 = start_line, field 3 = end_line
+  "read_tool_call": { 1: "filePath", 2: "offset", 3: "limit" },
+  // UpdateTodosToolCall: field 1 = todos (repeated)
+  "update_todos_tool_call": { 1: "todos" },
+  // ReadTodosToolCall: no fields
+  "read_todos_tool_call": {},
+  // EditToolCall: field 1 = path, field 2 = old_string, field 3 = new_string, field 4 = replace_all
+  "edit_tool_call": { 1: "filePath", 2: "oldString", 3: "newString", 4: "replaceAll" },
+  // LsToolCall: field 1 = path, field 2 = ignore (repeated)
+  "ls_tool_call": { 1: "path", 2: "ignore" },
+  // ReadLintsToolCall: no special fields
+  "read_lints_tool_call": {},
+  // McpToolCall: field 1 = provider_identifier, field 2 = tool_name, field 3 = tool_call_id, field 4 = args
+  "mcp_tool_call": { 1: "provider_identifier", 2: "tool_name", 3: "tool_call_id", 4: "args" },
+  // SemSearchToolCall: field 1 = query, field 2 = path
+  "sem_search_tool_call": { 1: "query", 2: "path" },
+  // CreatePlanToolCall: field 1 = plan
+  "create_plan_tool_call": { 1: "plan" },
+  // WebSearchToolCall: field 1 = query
+  "web_search_tool_call": { 1: "query" },
+  // TaskToolCall: field 1 = description, field 2 = prompt, field 3 = subagent_type
+  "task_tool_call": { 1: "description", 2: "prompt", 3: "subagent_type" },
+  // ListMcpResourcesToolCall: field 1 = provider_identifier
+  "list_mcp_resources_tool_call": { 1: "provider_identifier" },
+  // ReadMcpResourceToolCall: field 1 = provider_identifier, field 2 = uri
+  "read_mcp_resource_tool_call": { 1: "provider_identifier", 2: "uri" },
+  // ApplyAgentDiffToolCall: field 1 = path, field 2 = diff
+  "apply_agent_diff_tool_call": { 1: "filePath", 2: "diff" },
+  // AskQuestionToolCall: field 1 = question
+  "ask_question_tool_call": { 1: "question" },
+  // FetchToolCall: field 1 = url, field 2 = format
+  "fetch_tool_call": { 1: "url", 2: "format" },
+  // SwitchModeToolCall: field 1 = mode
+  "switch_mode_tool_call": { 1: "mode" },
+  // ExaSearchToolCall: field 1 = query
+  "exa_search_tool_call": { 1: "query" },
+  // ExaFetchToolCall: field 1 = url
+  "exa_fetch_tool_call": { 1: "url" },
+  // GenerateImageToolCall: field 1 = prompt
+  "generate_image_tool_call": { 1: "prompt" },
+  // RecordScreenToolCall: field 1 = duration
+  "record_screen_tool_call": { 1: "duration" },
+  // ComputerUseToolCall: various fields
+  "computer_use_tool_call": { 1: "action", 2: "text", 3: "coordinate" },
+};
+
+/**
  * Parse a ToolCall message to extract tool type and arguments
  */
 function parseToolCall(data: Uint8Array): { toolType: string; name: string; arguments: Record<string, any> } {
@@ -1394,19 +1453,45 @@ function parseToolCall(data: Uint8Array): { toolType: string; name: string; argu
       toolType = toolInfo.type;
       name = toolInfo.name;
       
+      // Get the argument schema for this tool type
+      const argSchema = TOOL_ARG_SCHEMA[toolType] || {};
+      
       // Parse the nested tool-specific message to extract arguments
       const toolFields = parseProtoFields(field.value);
       for (const tf of toolFields) {
+        // Get the proper argument name from schema, or fall back to field_N
+        const argName = argSchema[tf.fieldNumber] || `field_${tf.fieldNumber}`;
+        
         if (tf.wireType === 2 && tf.value instanceof Uint8Array) {
-          // Try to decode as string
+          // Try to decode as string first
           try {
-            const strValue = new TextDecoder().decode(tf.value);
-            args[`field_${tf.fieldNumber}`] = strValue;
+            let strValue = new TextDecoder().decode(tf.value);
+            
+            // Check if this looks like a nested protobuf message (starts with field tag)
+            // Common pattern: field 1 (tag 0x0a) followed by length then string
+            if (tf.value.length > 2 && tf.value[0] === 0x0a) {
+              // This is likely a nested message with a string in field 1
+              const nestedFields = parseProtoFields(tf.value);
+              for (const nf of nestedFields) {
+                if (nf.fieldNumber === 1 && nf.wireType === 2 && nf.value instanceof Uint8Array) {
+                  strValue = new TextDecoder().decode(nf.value);
+                  break;
+                }
+              }
+            }
+            
+            args[argName] = strValue;
           } catch {
-            args[`field_${tf.fieldNumber}`] = `<binary:${tf.value.length}bytes>`;
+            args[argName] = `<binary:${tf.value.length}bytes>`;
           }
         } else if (tf.wireType === 0) {
-          args[`field_${tf.fieldNumber}`] = tf.value;
+          // Varint - could be int, bool, etc.
+          // For boolean fields like replaceAll, convert to boolean
+          if (argName === "replaceAll") {
+            args[argName] = tf.value === 1;
+          } else {
+            args[argName] = tf.value;
+          }
         }
       }
       break; // Found the tool, stop
@@ -1840,6 +1925,11 @@ export class AgentServiceClient {
       else if (field.fieldNumber === 14) {
         console.log("[DEBUG] Found turn_ended (field 14)!");
         isComplete = true;
+      }
+      // field 13 = heartbeat
+      else if (field.fieldNumber === 13) {
+        // Just log - we don't need to do anything special with heartbeats
+        // The server will handle counting them
       }
     }
     

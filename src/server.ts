@@ -452,7 +452,7 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
     let toolCallIndex = 0;
     const toolCallIdMap: Map<string, number> = new Map(); // Map Cursor call IDs to OpenAI indices
     let toolExecutionCompleted = false;  // Track if we've completed tool execution
-    let checkpointAfterToolExec = false;  // Track if we've received checkpoint after tool exec
+    let hasReceivedExecRequest = false;  // Track if we've ever received an exec request
     
     const readable = new ReadableStream({
       async start(controller) {
@@ -649,9 +649,11 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
                   
                   await client.sendReadResult(execReq.id, execReq.execId, content);
                   console.log("[DEBUG] Sent read result");
+                  toolExecutionCompleted = true;
                 } catch (err: any) {
                   console.error("[ERROR] File read failed:", err.message);
                   await client.sendReadResult(execReq.id, execReq.execId, `Error: ${err.message}`);
+                  toolExecutionCompleted = true;
                 }
               } else if (execReq.type === 'mcp') {
                 // MCP tool call - convert to OpenAI format and emit
@@ -725,10 +727,10 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
                 // If we've completed tool execution and received a checkpoint, end the stream
                 // The model typically sends heartbeats after this but no more content
                 console.log("[DEBUG] Tool execution completed, ending stream after checkpoint");
-                checkpointAfterToolExec = true;
                 break;
               }
-              // Otherwise, continue waiting for exec messages that may come after checkpoint
+              // Track that we've seen a checkpoint - exec messages may follow
+              hasReceivedExecRequest = false;  // Reset for next batch
               console.log("[DEBUG] Continuing to wait for exec messages...");
             }
           }
@@ -866,6 +868,7 @@ try {
 
 const server = Bun.serve({
   port: PORT,
+  idleTimeout: 120, // 2 minutes to allow for long tool executions
   
   async fetch(req) {
     const url = new URL(req.url);

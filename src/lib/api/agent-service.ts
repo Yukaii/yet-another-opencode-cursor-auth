@@ -2042,6 +2042,29 @@ export class AgentServiceClient {
   }
 
   /**
+   * Send a grep/glob result back to the server
+   */
+  async sendGrepResult(
+    id: number,
+    execId: string | undefined,
+    pattern: string,
+    path: string,
+    files: string[]
+  ): Promise<void> {
+    if (!this.currentRequestId) {
+      throw new Error("No active chat stream - cannot send grep result");
+    }
+    
+    console.log("[DEBUG] Sending grep result for id:", id, "pattern:", pattern, "files:", files.length);
+    
+    const execClientMsg = buildExecClientMessageWithGrepResult(id, execId, pattern, path, files);
+    const responseMsg = buildAgentClientMessageWithExec(execClientMsg);
+    
+    await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, responseMsg);
+    this.currentAppendSeqno++;
+  }
+
+  /**
    * Result of parsing an InteractionUpdate message
    */
   private parseInteractionUpdate(data: Uint8Array): {

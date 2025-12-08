@@ -593,6 +593,47 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
                   await client.sendReadResult(execReq.id, execReq.execId, `Error: ${err.message}`, execReq.path, 0, 0n, false);
                   toolExecutionCompleted = true;
                 }
+              } else if (execReq.type === 'grep') {
+                // Handle grep/glob file search locally
+                console.log(`[DEBUG] Executing grep/glob: pattern=${execReq.pattern}, path=${execReq.path}, glob=${execReq.glob}`);
+                try {
+                  const searchPath = execReq.path || process.cwd();
+                  let files: string[] = [];
+                  
+                  if (execReq.glob) {
+                    // This is a glob search - find files matching the glob pattern
+                    // Use find command to match glob pattern
+                    const proc = Bun.spawn(['sh', '-c', `find "${searchPath}" -type f -name "${execReq.glob}" 2>/dev/null | head -100`], {
+                      stdout: 'pipe',
+                      stderr: 'pipe',
+                    });
+                    const output = await new Response(proc.stdout).text();
+                    await proc.exited;
+                    files = output.trim().split('\n').filter(f => f.length > 0);
+                    console.log(`[DEBUG] Glob found ${files.length} files`);
+                  } else if (execReq.pattern) {
+                    // This is a grep search - find files containing the pattern
+                    // Use ripgrep if available, otherwise fall back to grep
+                    const rgCmd = `rg -l "${execReq.pattern}" "${searchPath}" 2>/dev/null || grep -rl "${execReq.pattern}" "${searchPath}" 2>/dev/null | head -100`;
+                    const proc = Bun.spawn(['sh', '-c', rgCmd], {
+                      stdout: 'pipe',
+                      stderr: 'pipe',
+                    });
+                    const output = await new Response(proc.stdout).text();
+                    await proc.exited;
+                    files = output.trim().split('\n').filter(f => f.length > 0);
+                    console.log(`[DEBUG] Grep found ${files.length} files`);
+                  }
+                  
+                  await client.sendGrepResult(execReq.id, execReq.execId, execReq.pattern || execReq.glob || '', searchPath, files);
+                  console.log("[DEBUG] Sent grep result");
+                  toolExecutionCompleted = true;
+                } catch (err: any) {
+                  console.error("[ERROR] Grep execution failed:", err.message);
+                  // Send empty result on error
+                  await client.sendGrepResult(execReq.id, execReq.execId, execReq.pattern || '', execReq.path || process.cwd(), []);
+                  toolExecutionCompleted = true;
+                }
               } else if (execReq.type === 'mcp') {
                 // MCP tool call - convert to OpenAI format and emit
                 hasToolCalls = true;

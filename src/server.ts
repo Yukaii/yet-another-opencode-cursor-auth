@@ -451,6 +451,8 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
     let hasToolCalls = false;
     let toolCallIndex = 0;
     const toolCallIdMap: Map<string, number> = new Map(); // Map Cursor call IDs to OpenAI indices
+    let toolExecutionCompleted = false;  // Track if we've completed tool execution
+    let checkpointAfterToolExec = false;  // Track if we've received checkpoint after tool exec
     
     const readable = new ReadableStream({
       async start(controller) {
@@ -600,10 +602,12 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
                   
                   await client.sendShellResult(execReq.id, execReq.execId, execReq.command, cwd, stdout, stderr, exitCode, executionTimeMs);
                   console.log("[DEBUG] Sent shell result");
+                  toolExecutionCompleted = true;
                 } catch (err: any) {
                   console.error("[ERROR] Shell execution failed:", err.message);
                   const executionTimeMs = Date.now() - startTime;
                   await client.sendShellResult(execReq.id, execReq.execId, execReq.command, cwd, "", `Error: ${err.message}`, 1, executionTimeMs);
+                  toolExecutionCompleted = true;
                 }
               } else if (execReq.type === 'ls') {
                 // Execute ls locally
@@ -620,9 +624,11 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
                   
                   await client.sendLsResult(execReq.id, execReq.execId, output);
                   console.log("[DEBUG] Sent ls result");
+                  toolExecutionCompleted = true;
                 } catch (err: any) {
                   console.error("[ERROR] LS execution failed:", err.message);
                   await client.sendLsResult(execReq.id, execReq.execId, `Error: ${err.message}`);
+                  toolExecutionCompleted = true;
                 }
               } else if (execReq.type === 'request_context') {
                 // Send request context (workspace info)
@@ -712,9 +718,18 @@ async function handleChatCompletions(req: Request, accessToken: string): Promise
               // Stream is ending
               break;
             } else if (chunk.type === "checkpoint") {
-              // Checkpoint received - but DON'T break yet!
-              // exec_request messages can come AFTER checkpoint
-              console.log("[DEBUG] Checkpoint received, continuing to wait for exec messages...");
+              // Checkpoint received
+              console.log("[DEBUG] Checkpoint received, toolExecutionCompleted:", toolExecutionCompleted);
+              
+              if (toolExecutionCompleted) {
+                // If we've completed tool execution and received a checkpoint, end the stream
+                // The model typically sends heartbeats after this but no more content
+                console.log("[DEBUG] Tool execution completed, ending stream after checkpoint");
+                checkpointAfterToolExec = true;
+                break;
+              }
+              // Otherwise, continue waiting for exec messages that may come after checkpoint
+              console.log("[DEBUG] Continuing to wait for exec messages...");
             }
           }
           

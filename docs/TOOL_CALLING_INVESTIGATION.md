@@ -1,14 +1,36 @@
 # Tool Calling Investigation Summary
 
 **Date**: December 8, 2025  
-**Status**: ✅ BREAKTHROUGH - Exec flow working! Integration pending
+**Status**: ✅ Tool execution working (shell, ls, read, grep/glob) - Model continuation issue pending
 
-## Latest Status (Session 5)
+## Latest Status (Session 6)
+
+### Completed: Grep/Glob Tool Support
+Added support for grep and glob file search operations:
+
+1. **`sendGrepResult()` method** added to `AgentServiceClient` class
+2. **Grep handler** in `server.ts` for `execReq.type === 'grep'`
+3. **Glob support** using Bun's native `Bun.Glob` API for recursive patterns like `**/*.ts`
+4. **Grep support** using ripgrep (`rg`) with fallback to `grep -rl`
+
+**Test Results**:
+- Glob pattern `**/*.ts` in `src` directory correctly found 17 TypeScript files
+- Results properly encoded and sent back to Cursor backend
+- Tool call marked as completed
+
+### Known Issue: Model Continuation After Tool Execution
+After tool execution completes successfully, the model sometimes gets stuck in a heartbeat loop instead of generating a text response. The stream receives continuous heartbeats but no `turn_ended` or text delta.
+
+**Workaround**: After 10 heartbeats post-tool-execution, the stream auto-closes with a stop reason.
+
+---
+
+## Previous Status (Session 5)
 
 ### Major Breakthrough
 The exec flow is now **fully working** in the test script! We can:
 1. Receive `exec_server_message` requests from Cursor
-2. Execute local commands (shell, ls)
+2. Execute local commands (shell, ls, read, grep/glob)
 3. Send results back via `BidiAppend`
 
 ### Root Cause Fixed
@@ -106,6 +128,10 @@ InteractionUpdate:
 2. **Tool Encoding**: Tools encoded in both `AgentRunRequest.mcp_tools` AND `RequestContext.tools`
 3. **KV Message Handling**: Blob get/set operations are handled correctly
 4. **Checkpoint Handling**: Conversation completion detection works
+5. **Shell Execution**: Local shell command execution via `exec_server_message`
+6. **LS Execution**: Directory listing via `ls_args`
+7. **Read Execution**: File reading via `read_args` with proper ReadSuccess encoding
+8. **Grep/Glob Execution**: File search via `grep_args` with Bun.Glob support
 
 ### Code Changes Made
 1. Added `buildRequestContext()` function that includes tools in field 7
@@ -578,6 +604,53 @@ AgentClientMessage {
 }
 ```
 
+### ExecClientMessage for ReadResult
+```
+AgentClientMessage {
+  field 2: ExecClientMessage {
+    field 1: id
+    field 15: exec_id
+    field 7: ReadResult {
+      field 1: ReadSuccess {
+        field 1: path (string) - the file path that was read
+        field 2: content (string) - oneof output (text files)
+        field 3: total_lines (int32)
+        field 4: file_size (int64)
+        field 5: data (bytes) - oneof output (binary/image files)
+        field 6: truncated (bool)
+      }
+    }
+  }
+}
+```
+
+### ExecClientMessage for GrepResult
+```
+AgentClientMessage {
+  field 2: ExecClientMessage {
+    field 1: id
+    field 15: exec_id
+    field 5: GrepResult {
+      field 1: GrepSuccess {
+        field 1: pattern (string)
+        field 2: path (string)
+        field 3: output_mode (string) - "files_with_matches"
+        field 4: workspace_results (map<string, GrepUnionResult>) {
+          // Map entry: key=path, value=GrepUnionResult
+          GrepUnionResult {
+            field 2: GrepFilesResult {
+              field 1: files (repeated string)
+              field 2: total_files (int32)
+              field 3: client_truncated (bool)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### KvClientMessage for Blob Operations
 ```
 AgentClientMessage {
@@ -612,18 +685,22 @@ Client                                     Server
 
 ## Remaining Issues
 
-1. **LsResult format** - Currently sending simple string in `files_string`, server may prefer `LsDirectoryTreeNode` tree structure
-2. **Heartbeat handling** - Server sends heartbeats, we acknowledge but may need better handling
-3. **Integration** - Test script works, needs to be integrated into `agent-service.ts`
+1. **Model continuation after tool execution** - Model gets stuck in heartbeat loop after tool execution instead of generating response text. Current workaround: auto-close after 10 heartbeats.
+2. **LsResult format** - Currently sending simple string in `files_string`, server may prefer `LsDirectoryTreeNode` tree structure
+3. **MCP tool forwarding** - MCP tools are forwarded to OpenAI client but full round-trip not tested
 
 ## Next Steps
 
 1. ✅ Fix empty conversation_state encoding (done)
 2. ✅ Add RequestContext to initial message (done)
 3. ✅ Handle exec_server_message (done)
-4. ⬜ Implement proper LsDirectoryTreeNode format
-5. ⬜ Integrate exec handling into agent-service.ts
-6. ⬜ Test MCP tool calls (mcp_args) - different from built-in tools
+4. ✅ Implement shell execution (done)
+5. ✅ Implement ls execution (done)
+6. ✅ Implement read execution with proper ReadSuccess format (done)
+7. ✅ Implement grep/glob execution with Bun.Glob (done)
+8. ⬜ Fix model continuation after tool execution (heartbeat issue)
+9. ⬜ Implement proper LsDirectoryTreeNode format
+10. ⬜ Test MCP tool round-trip (mcp_args → client → mcp_result)
 
 ## Environment
 

@@ -1814,6 +1814,9 @@ export class AgentServiceClient {
       "x-cursor-client-type": "cli",
       "x-cursor-timezone": Intl.DateTimeFormat().resolvedOptions().timeZone,
       "x-ghost-mode": "false",
+      // Signal to backend that we can receive SSE text/event-stream responses
+      // Without this, server may store responses in KV blobs instead of streaming
+      "x-cursor-streaming": "true",
     };
 
     if (requestId) {
@@ -1876,6 +1879,23 @@ export class AgentServiceClient {
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`BidiAppend failed: ${response.status} - ${errorText}`);
+    }
+
+    // Read the response body to see if there's any useful information
+    const responseBody = await response.arrayBuffer();
+    if (responseBody.byteLength > 0) {
+      console.log(`[DEBUG] BidiAppend response: ${responseBody.byteLength} bytes`);
+      const bytes = new Uint8Array(responseBody);
+      // Parse as gRPC-Web envelope
+      if (bytes.length >= 5) {
+        const flags = bytes[0];
+        const length = (bytes[1]! << 24) | (bytes[2]! << 16) | (bytes[3]! << 8) | bytes[4]!;
+        console.log(`[DEBUG] BidiAppend response: flags=${flags}, length=${length}, totalBytes=${bytes.length}`);
+        if (length > 0 && bytes.length >= 5 + length) {
+          const payload = bytes.slice(5, 5 + length);
+          console.log(`[DEBUG] BidiAppend payload hex: ${Buffer.from(payload).toString('hex')}`);
+        }
+      }
     }
   }
 

@@ -1073,8 +1073,9 @@ async function legacyStreamResponse({ body, model, prompt, completionId, created
             } else if (execReq.type === "ls") {
               console.log(`[DEBUG] Listing directory: ${execReq.path}`);
               try {
-                const entries = await (Bun.file(execReq.path) as any).dir();
-                const files = (entries as { name: string }[]).map((e) => e.name).join("\n");
+                const { readdir } = await import("node:fs/promises");
+                const entries = await readdir(execReq.path, { withFileTypes: true });
+                const files = entries.map((e) => e.isDirectory() ? `${e.name}/` : e.name).join("\n");
                 await client.sendLsResult(execReq.id, execReq.execId, files);
                 console.log("[DEBUG] Sent ls result");
                 toolExecutionCompleted = true;
@@ -1156,9 +1157,14 @@ async function legacyStreamResponse({ body, model, prompt, completionId, created
           } else if (chunk.type === "heartbeat") {
             if (toolExecutionCompleted) {
               heartbeatCountAfterExec++;
-              if (heartbeatCountAfterExec >= 10) {
+              // Wait much longer to see if server eventually sends text
+              // Native Cursor CLI has no heartbeat limit - it waits indefinitely
+              if (heartbeatCountAfterExec >= 300) {  // ~5 minutes at 1 heartbeat/sec
                 console.log("[DEBUG] Closing stream after heartbeat threshold post tool execution");
                 break;
+              }
+              if (heartbeatCountAfterExec % 30 === 0) {
+                console.log(`[DEBUG] ${heartbeatCountAfterExec} heartbeats since tool execution, still waiting...`);
               }
             }
           } else if (chunk.type === "checkpoint") {

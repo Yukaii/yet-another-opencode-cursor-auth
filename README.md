@@ -211,6 +211,28 @@ Add to your `opencode.json` configuration:
 }
 ```
 
+#### Plugin Setup (Pre-NPM Publishing)
+
+Before the package is published to npm, you need to manually set up the plugin for local development. Create a file at `.opencode/plugin/cursor-auth.ts` in your project:
+
+```typescript
+/**
+ * OpenCode Cursor Auth Plugin - Local Development Wrapper
+ *
+ * This file re-exports the Cursor OAuth plugin for local testing with OpenCode.
+ * OpenCode automatically discovers plugins in .opencode/plugin/*.ts
+ *
+ * Usage:
+ *   1. Run `opencode` in this directory
+ *   2. The plugin will be auto-loaded
+ *   3. Configure a provider with id "cursor" to use this auth
+ */
+
+export { CursorOAuthPlugin } from "../../src/plugin/index.ts";
+```
+
+This allows OpenCode to discover and load the Cursor authentication plugin during local development.
+
 ## Tool Calling
 
 The proxy supports full OpenAI-compatible tool calling. When tools are provided, Cursor's built-in tools are mapped to OpenAI function calls:

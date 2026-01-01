@@ -94,3 +94,95 @@ export function buildKvClientMessage(
 export function buildAgentClientMessageWithKv(kvClientMessage: Uint8Array): Uint8Array {
   return encodeMessageField(3, kvClientMessage);
 }
+
+import type { BlobAnalysis } from "./types";
+
+export function analyzeBlobData(data: Uint8Array): BlobAnalysis {
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(data);
+    try {
+      const json = JSON.parse(text) as Record<string, unknown>;
+      return { type: 'json', json, text };
+    } catch {
+      return { type: 'text', text };
+    }
+  } catch { }
+
+  try {
+    const fields = parseProtoFields(data);
+    if (fields.length > 0 && fields.length < 100) {
+      const protoFields: BlobAnalysis["protoFields"] = [];
+      for (const f of fields) {
+        const entry: { num: number; wire: number; size: number; text?: string } = {
+          num: f.fieldNumber,
+          wire: f.wireType,
+          size: f.value instanceof Uint8Array ? f.value.length : 0,
+        };
+        if (f.wireType === 2 && f.value instanceof Uint8Array) {
+          try {
+            entry.text = new TextDecoder('utf-8', { fatal: true }).decode(f.value);
+          } catch { }
+        }
+        protoFields.push(entry);
+      }
+      return { type: 'protobuf', protoFields };
+    }
+  } catch { }
+
+  return { type: 'binary' };
+}
+
+export interface AssistantBlobContent {
+  blobId: string;
+  content: string;
+}
+
+interface MessageLike {
+  role?: unknown;
+  content?: unknown;
+  type?: unknown;
+  text?: unknown;
+  messages?: unknown[];
+}
+
+export function extractAssistantContent(
+  blobAnalysis: BlobAnalysis,
+  blobKey: string
+): AssistantBlobContent[] {
+  const results: AssistantBlobContent[] = [];
+
+  if (blobAnalysis.type === 'json' && blobAnalysis.json) {
+    const json = blobAnalysis.json as MessageLike;
+    
+    if (json.role === "assistant") {
+      const content = json.content;
+      if (typeof content === "string" && content.length > 0) {
+        results.push({ blobId: blobKey, content });
+      } else if (Array.isArray(content)) {
+        for (const part of content as MessageLike[]) {
+          if (typeof part === 'string') {
+            results.push({ blobId: blobKey, content: part });
+          } else if (part?.type === 'text' && typeof part?.text === 'string') {
+            results.push({ blobId: blobKey, content: part.text });
+          }
+        }
+      }
+    }
+    
+    if (Array.isArray(json.messages)) {
+      for (const msg of json.messages as MessageLike[]) {
+        if (msg?.role === "assistant" && typeof msg?.content === "string") {
+          results.push({ blobId: blobKey, content: msg.content });
+        }
+      }
+    }
+  } else if (blobAnalysis.type === 'protobuf' && blobAnalysis.protoFields) {
+    for (const field of blobAnalysis.protoFields) {
+      if (field.text && field.text.length > 50 && !field.text.startsWith('{') && !field.text.startsWith('[')) {
+        results.push({ blobId: `${blobKey}:f${field.num}`, content: field.text });
+      }
+    }
+  }
+
+  return results;
+}

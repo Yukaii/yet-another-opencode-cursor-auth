@@ -47,8 +47,6 @@ import {
   buildAgentClientMessageWithExec,
   buildExecClientControlMessage,
   buildAgentClientMessageWithExecControl,
-  parseToolCallStartedUpdate,
-  parsePartialToolCallUpdate,
   parseKvServerMessage,
   buildKvClientMessage,
   buildAgentClientMessageWithKv,
@@ -62,23 +60,18 @@ import {
   encodeModelDetails,
   encodeAgentRunRequest,
   encodeAgentClientMessage,
+  parseInteractionUpdate,
+  analyzeBlobData,
+  extractAssistantContent,
 } from "./proto";
 import type {
   OpenAIToolDefinition,
   McpExecRequest,
-  ShellExecRequest,
-  LsExecRequest,
-  ReadExecRequest,
-  GrepExecRequest,
-  WriteExecRequest,
   ExecRequest,
   KvServerMessage,
   ChatTimingMetrics,
   AgentServiceOptions,
   AgentChatRequest,
-  McpResult,
-  WriteResult,
-  ParsedToolCall,
   ToolCallInfo,
   AgentStreamChunk as AgentStreamChunkType,
 } from "./proto/types";
@@ -275,65 +268,6 @@ export class AgentServiceClient {
     }
   }
 
-  /**
-   * Analyze blob data to determine its type and extract content
-   */
-  private analyzeBlobData(data: Uint8Array): {
-    type: 'json' | 'text' | 'protobuf' | 'binary';
-    json?: Record<string, unknown>;
-    text?: string;
-    protoFields?: Array<{ num: number; wire: number; size: number; text?: string }>;
-  } {
-    // Try UTF-8 text first
-    try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(data);
-      
-      // Try JSON
-      try {
-        const json = JSON.parse(text);
-        return { type: 'json', json, text };
-      } catch {
-        // Not JSON, return as text
-        return { type: 'text', text };
-      }
-    } catch {
-      // Not valid UTF-8
-    }
-
-    // Try protobuf parsing
-    try {
-      const fields = parseProtoFields(data);
-      if (fields.length > 0 && fields.length < 100) { // Reasonable field count
-        const protoFields: Array<{ num: number; wire: number; size: number; text?: string }> = [];
-        for (const f of fields) {
-          const entry: { num: number; wire: number; size: number; text?: string } = {
-            num: f.fieldNumber,
-            wire: f.wireType,
-            size: f.value instanceof Uint8Array ? f.value.length : 0,
-          };
-          // Try to decode field value as text
-          if (f.wireType === 2 && f.value instanceof Uint8Array) {
-            try {
-              entry.text = new TextDecoder('utf-8', { fatal: true }).decode(f.value);
-            } catch {
-              // Binary field
-            }
-          }
-          protoFields.push(entry);
-        }
-        return { type: 'protobuf', protoFields };
-      }
-    } catch {
-      // Not valid protobuf
-    }
-
-    return { type: 'binary' };
-  }
-
-  /**
-   * Handle KV server message and send response
-   * Also tracks assistant response blobs for session reuse
-   */
   private async handleKvMessage(
     kvMsg: KvServerMessage,
     requestId: string,
@@ -343,7 +277,6 @@ export class AgentServiceClient {
       const key = this.blobIdToKey(kvMsg.blobId);
       const data = this.blobStore.get(key);
 
-      // GetBlobResult: field 1 = blob_data (bytes, optional)
       const result = data ? encodeMessageField(1, data) : new Uint8Array(0);
       const kvClientMsg = buildKvClientMessage(kvMsg.id, 'get_blob_result', result);
       const responseMsg = buildAgentClientMessageWithKv(kvClientMsg);
@@ -356,93 +289,15 @@ export class AgentServiceClient {
       const key = this.blobIdToKey(kvMsg.blobId);
       this.blobStore.set(key, kvMsg.blobData);
 
-      // Enhanced debug: analyze blob data thoroughly to find assistant responses
-      // Cursor may store responses in various formats (JSON, protobuf, text)
-      const blobAnalysis = this.analyzeBlobData(kvMsg.blobData);
+      const blobAnalysis = analyzeBlobData(kvMsg.blobData);
       debugLog(`[KV-BLOB] SET id=${kvMsg.id}, key=${key.slice(0, 16)}..., size=${kvMsg.blobData.length}b, type=${blobAnalysis.type}`);
       
-      if (blobAnalysis.type === 'json') {
-        debugLog(`[KV-BLOB]   JSON keys: ${Object.keys(blobAnalysis.json || {}).join(', ')}`);
-        // Log the role field if present
-        if (blobAnalysis.json?.role) {
-          debugLog(`[KV-BLOB]   role="${blobAnalysis.json.role}"`);
-        }
-        // Check for assistant response patterns
-        if (blobAnalysis.json?.role === "assistant") {
-          const content = blobAnalysis.json.content;
-          debugLog(`[KV-BLOB]   content type: ${typeof content}, value: ${JSON.stringify(content)?.slice(0, 200)}`);
-          if (typeof content === "string" && content.length > 0) {
-            debugLog(`[KV-BLOB]   ✓ Assistant response found! (${content.length} chars)`);
-            debugLog(`[KV-BLOB]   Preview: ${content.slice(0, 150)}...`);
-            this.pendingAssistantBlobs.push({ blobId: key, content });
-          } else if (Array.isArray(content)) {
-            // Content might be an array of content parts (like in OpenAI's format)
-            debugLog(`[KV-BLOB]   ✓ Assistant content is array with ${content.length} parts`);
-            for (const part of content) {
-              if (typeof part === 'string') {
-                this.pendingAssistantBlobs.push({ blobId: key, content: part });
-              } else if (part?.type === 'text' && typeof part?.text === 'string') {
-                debugLog(`[KV-BLOB]   ✓ Text part: ${part.text.slice(0, 100)}...`);
-                this.pendingAssistantBlobs.push({ blobId: key, content: part.text });
-              }
-            }
-          } else if (content === null || content === undefined) {
-            // Content might be null for tool-calling responses
-            debugLog("[KV-BLOB]   Assistant content is null/undefined (likely tool-calling response)");
-          }
-        }
-        // Check for tool_calls in assistant messages
-        if (blobAnalysis.json?.role === "assistant" && Array.isArray(blobAnalysis.json.tool_calls)) {
-          debugLog(`[KV-BLOB]   Assistant has tool_calls: ${blobAnalysis.json.tool_calls.length}`);
-        }
-        // Check for "user" role with tool result
-        if (blobAnalysis.json?.role === "user" && blobAnalysis.json?.content) {
-          debugLog(`[KV-BLOB]   User message content (${String(blobAnalysis.json.content).length} chars): ${String(blobAnalysis.json.content).slice(0, 100)}...`);
-        }
-        // Check for "tool" role
-        if (blobAnalysis.json?.role === "tool") {
-          debugLog(`[KV-BLOB]   Tool result for: ${blobAnalysis.json.tool_call_id}`);
-        }
-        // Also check for messages array pattern
-        if (Array.isArray(blobAnalysis.json?.messages)) {
-          for (const msg of blobAnalysis.json.messages) {
-            if (msg?.role === "assistant" && typeof msg?.content === "string") {
-              debugLog(`[KV-BLOB]   ✓ Assistant in messages array! (${msg.content.length} chars)`);
-              debugLog(`[KV-BLOB]   Preview: ${msg.content.slice(0, 150)}...`);
-              this.pendingAssistantBlobs.push({ blobId: key, content: msg.content });
-            }
-          }
-        }
-        // Check for content field directly (some formats)
-        if (typeof blobAnalysis.json?.content === "string" && !blobAnalysis.json?.role) {
-          debugLog(`[KV-BLOB]   Content field found (${blobAnalysis.json.content.length} chars)`);
-          debugLog(`[KV-BLOB]   Preview: ${blobAnalysis.json.content.slice(0, 150)}...`);
-        }
-      } else if (blobAnalysis.type === 'text') {
-        debugLog(`[KV-BLOB]   Text preview: ${blobAnalysis.text?.slice(0, 200)}...`);
-        // Check if text looks like a model response (starts with text, not JSON/protobuf markers)
-        if (blobAnalysis.text && !blobAnalysis.text.startsWith('{') && !blobAnalysis.text.startsWith('[') && blobAnalysis.text.length > 50) {
-          debugLog("[KV-BLOB]   Possible plain text response - check manually");
-        }
-      } else if (blobAnalysis.type === 'protobuf') {
-        debugLog(`[KV-BLOB]   Protobuf fields: ${blobAnalysis.protoFields?.map(f => `f${f.num}:w${f.wire}(${f.size}b)`).join(', ')}`);
-        // Try to find text content within protobuf fields
-        for (const field of blobAnalysis.protoFields || []) {
-          if (field.text && field.text.length > 50) {
-            debugLog(`[KV-BLOB]   field${field.num} text: ${field.text.slice(0, 100)}...`);
-            // Check if this might be assistant content
-            if (!field.text.startsWith('{') && !field.text.startsWith('[')) {
-              debugLog(`[KV-BLOB]   ✓ Possible assistant text in protobuf field ${field.num}`);
-              // Store it for potential use
-              this.pendingAssistantBlobs.push({ blobId: `${key}:f${field.num}`, content: field.text });
-            }
-          }
-        }
-      } else {
-        debugLog(`[KV-BLOB]   Binary data (hex start): ${Buffer.from(kvMsg.blobData.slice(0, 32)).toString('hex')}`);
+      const extractedContent = extractAssistantContent(blobAnalysis, key);
+      for (const item of extractedContent) {
+        debugLog(`[KV-BLOB]   ✓ Assistant content found: ${item.content.slice(0, 100)}...`);
+        this.pendingAssistantBlobs.push(item);
       }
 
-      // SetBlobResult: empty = no error
       const result = new Uint8Array(0);
       const kvClientMsg = buildKvClientMessage(kvMsg.id, 'set_blob_result', result);
       const responseMsg = buildAgentClientMessageWithKv(kvClientMsg);
@@ -678,98 +533,6 @@ export class AgentServiceClient {
   }
 
   /**
-   * Result of parsing an InteractionUpdate message
-   */
-  private parseInteractionUpdate(data: Uint8Array): {
-    text: string | null;
-    isComplete: boolean;
-    isHeartbeat: boolean;
-    toolCallStarted: { callId: string; modelCallId: string; toolType: string; name: string; arguments: string } | null;
-    toolCallCompleted: { callId: string; modelCallId: string; toolType: string; name: string; arguments: string } | null;
-    partialToolCall: { callId: string; argsTextDelta: string } | null;
-  } {
-    const fields = parseProtoFields(data);
-    // Log all fields in InteractionUpdate for debugging
-    debugLog("[DEBUG] InteractionUpdate fields:", fields.map(f => `field${f.fieldNumber}`).join(", "));
-
-    let text: string | null = null;
-    let isComplete = false;
-    let isHeartbeat = false;
-    let toolCallStarted: { callId: string; modelCallId: string; toolType: string; name: string; arguments: string } | null = null;
-    let toolCallCompleted: { callId: string; modelCallId: string; toolType: string; name: string; arguments: string } | null = null;
-    let partialToolCall: { callId: string; argsTextDelta: string } | null = null;
-
-    for (const field of fields) {
-      // field 1 = text_delta (TextDeltaUpdate)
-      if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
-        const innerFields = parseProtoFields(field.value);
-        for (const innerField of innerFields) {
-          if (innerField.fieldNumber === 1 && innerField.wireType === 2 && innerField.value instanceof Uint8Array) {
-            text = new TextDecoder().decode(innerField.value);
-          }
-        }
-      }
-      // field 2 = tool_call_started (ToolCallStartedUpdate)
-      else if (field.fieldNumber === 2 && field.wireType === 2 && field.value instanceof Uint8Array) {
-        debugLog("[DEBUG] Found tool_call_started (field 2)!");
-        const parsed = parseToolCallStartedUpdate(field.value);
-        if (parsed.toolCall) {
-          toolCallStarted = {
-            callId: parsed.callId,
-            modelCallId: parsed.modelCallId,
-            toolType: parsed.toolCall.toolType,
-            name: parsed.toolCall.name,
-            arguments: JSON.stringify(parsed.toolCall.arguments),
-          };
-        }
-      }
-      // field 3 = tool_call_completed (ToolCallCompletedUpdate)
-      else if (field.fieldNumber === 3 && field.wireType === 2 && field.value instanceof Uint8Array) {
-        debugLog("[DEBUG] Found tool_call_completed (field 3)!");
-        const parsed = parseToolCallStartedUpdate(field.value); // Same structure as started
-        if (parsed.toolCall) {
-          toolCallCompleted = {
-            callId: parsed.callId,
-            modelCallId: parsed.modelCallId,
-            toolType: parsed.toolCall.toolType,
-            name: parsed.toolCall.name,
-            arguments: JSON.stringify(parsed.toolCall.arguments),
-          };
-        }
-      }
-      // field 7 = partial_tool_call (PartialToolCallUpdate)
-      else if (field.fieldNumber === 7 && field.wireType === 2 && field.value instanceof Uint8Array) {
-        debugLog("[DEBUG] Found partial_tool_call (field 7)!");
-        const parsed = parsePartialToolCallUpdate(field.value);
-        partialToolCall = {
-          callId: parsed.callId,
-          argsTextDelta: parsed.argsTextDelta,
-        };
-      }
-      // field 8 = token_delta (TokenDeltaUpdate)
-      else if (field.fieldNumber === 8 && field.wireType === 2 && field.value instanceof Uint8Array) {
-        const tokenFields = parseProtoFields(field.value);
-        for (const tField of tokenFields) {
-          if (tField.fieldNumber === 1 && tField.wireType === 2 && tField.value instanceof Uint8Array) {
-            text = new TextDecoder().decode(tField.value);
-          }
-        }
-      }
-      // field 14 = turn_ended (TurnEndedUpdate)
-      else if (field.fieldNumber === 14) {
-        debugLog("[DEBUG] Found turn_ended (field 14)!");
-        isComplete = true;
-      }
-      // field 13 = heartbeat
-      else if (field.fieldNumber === 13) {
-        isHeartbeat = true;
-      }
-    }
-
-    return { text, isComplete, isHeartbeat, toolCallStarted, toolCallCompleted, partialToolCall };
-  }
-
-  /**
    * Send a streaming chat request using BidiSse pattern
    */
   async *chatStream(request: AgentChatRequest): AsyncGenerator<AgentStreamChunkType> {
@@ -907,7 +670,7 @@ export class AgentServiceClient {
                 // field 1 = interaction_update
                 if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
                   debugLog("[DEBUG] Received interaction_update, length:", field.value.length);
-                  const parsed = this.parseInteractionUpdate(field.value);
+                  const parsed = parseInteractionUpdate(field.value);
 
                   // Yield text content
                   if (parsed.text) {

@@ -77,7 +77,11 @@ export {
   parseKvServerMessage,
   buildKvClientMessage,
   buildAgentClientMessageWithKv,
+  analyzeBlobData,
+  extractAssistantContent,
 } from "./kv";
+
+export type { AssistantBlobContent } from "./kv";
 
 export {
   encodeBidiRequestId,
@@ -102,3 +106,5 @@ export {
 } from "./agent-messages";
 
 export type { McpDescriptorInput } from "./agent-messages";
+
+export { parseInteractionUpdate } from "./interaction";

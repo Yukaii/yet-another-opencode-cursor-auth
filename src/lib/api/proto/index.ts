@@ -78,3 +78,27 @@ export {
   buildKvClientMessage,
   buildAgentClientMessageWithKv,
 } from "./kv";
+
+export {
+  encodeBidiRequestId,
+  encodeBidiAppendRequest,
+} from "./bidi";
+
+export {
+  encodeMcpToolDefinition,
+  buildRequestContextEnv,
+  encodeMcpInstructions,
+  buildRequestContext,
+  encodeUserMessage,
+  encodeUserMessageAction,
+  encodeConversationAction,
+  encodeModelDetails,
+  encodeEmptyConversationState,
+  encodeMcpTools,
+  encodeMcpDescriptor,
+  encodeMcpFileSystemOptions,
+  encodeAgentRunRequest,
+  encodeAgentClientMessage,
+} from "./agent-messages";
+
+export type { McpDescriptorInput } from "./agent-messages";

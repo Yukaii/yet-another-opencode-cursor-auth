@@ -75,6 +75,7 @@
     "@babel/parser": "^7.28.5",
     "@babel/types": "^7.28.5",
     "@bufbuild/protobuf": "1.10.0",
-    "gpt-tokenizer": "^3.4.0"
+    "gpt-tokenizer": "^3.4.0",
+    "llm-info": "^1.0.69"
   }
 }

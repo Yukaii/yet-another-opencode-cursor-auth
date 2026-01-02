@@ -11,6 +11,7 @@
 import { exec } from "node:child_process";
 import { platform } from "node:os";
 
+import { ModelInfoMap } from "llm-info";
 import {
   LoginManager,
   CURSOR_API_BASE_URL,
@@ -34,6 +35,40 @@ import type {
 // --- Constants ---
 
 export const CURSOR_PROVIDER_ID = "cursor";
+
+const CURSOR_TO_LLM_INFO_MAP: Record<string, string> = {
+  "sonnet-4.5": "claude-sonnet-4-5-20250929",
+  "sonnet-4.5-thinking": "claude-sonnet-4-5-20250929",
+  "opus-4.5": "claude-opus-4-5-20251101",
+  "opus-4.5-thinking": "claude-opus-4-5-20251101",
+  "opus-4.1": "claude-opus-4-1-20250805",
+  "gemini-3-pro": "gemini-3-pro-preview",
+  "gemini-3-flash": "gemini-2.5-flash",
+  "gpt-5.2": "gpt-5.2",
+  "gpt-5.2-high": "gpt-5.2",
+  "gpt-5.1": "gpt-5",
+  "gpt-5.1-high": "gpt-5",
+  "gpt-5.1-codex": "gpt-5",
+  "gpt-5.1-codex-high": "gpt-5",
+  "gpt-5.1-codex-max": "gpt-5",
+  "gpt-5.1-codex-max-high": "gpt-5",
+  "grok": "grok-4",
+};
+
+const DEFAULT_LIMITS = { context: 128000, output: 16384 };
+
+function getModelLimits(cursorModelId: string): { context: number; output: number } {
+  const llmInfoId = CURSOR_TO_LLM_INFO_MAP[cursorModelId];
+  if (!llmInfoId) return DEFAULT_LIMITS;
+  
+  const info = (ModelInfoMap as Record<string, { contextWindowTokenLimit?: number; outputTokenLimit?: number }>)[llmInfoId];
+  if (!info) return DEFAULT_LIMITS;
+  
+  return {
+    context: info.contextWindowTokenLimit ?? DEFAULT_LIMITS.context,
+    output: info.outputTokenLimit ?? DEFAULT_LIMITS.output,
+  };
+}
 
 // --- Auth Helpers ---
 
@@ -235,14 +270,14 @@ export const CursorOAuthPlugin = async ({
             if (!modelID) continue;
 
             const existingModel = provider.models[modelID];
+            const limits = getModelLimits(modelID);
             
-            // Build model in OpenCode's exact internal format (see provider.ts lines 547-593)
             const parsedModel = {
               id: modelID,
               api: {
                 id: modelID,
                 npm: "@ai-sdk/openai-compatible",
-                url: undefined, // Will use baseURL from loader result
+                url: undefined,
               },
               status: "active" as const,
               name: m.displayName || m.displayNameShort || modelID,
@@ -277,12 +312,8 @@ export const CursorOAuthPlugin = async ({
                 },
               },
               options: {},
-              limit: {
-                context: 128000,
-                output: 16384,
-              },
+              limit: limits,
               headers: {},
-              // Preserve any existing config overrides
               ...existingModel,
             };
             

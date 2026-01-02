@@ -43,7 +43,6 @@ import {
   findSessionIdInMessages,
   makeToolCallId,
   selectCallBase,
-  sendToolResultsToCursor,
   type SessionLike,
 } from "../session-reuse";
 
@@ -279,7 +278,13 @@ interface StreamParams {
 async function streamChatCompletion(params: StreamParams): Promise<Response> {
   const { client, prompt, model, tools, toolsProvided, messages, completionId, created, log } = params;
 
-  if (toolsProvided && sessionReuseEnabled()) {
+  // Route to session reuse if:
+  // 1. Tools are provided (new request that may result in tool calls), OR
+  // 2. Messages contain tool results (continuation with tool results)
+  const hasToolMessages = messages.some(m => m.role === "tool" && m.tool_call_id);
+  const shouldUseSessionReuse = sessionReuseEnabled() && (toolsProvided || hasToolMessages);
+  
+  if (shouldUseSessionReuse) {
     return streamChatCompletionWithSessionReuse({
       client,
       prompt,
@@ -468,10 +473,31 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
   const existingSessionId = findSessionIdInMessages(messages);
   const toolMessages = collectToolMessages(messages);
 
+  log(`[Session Reuse] existingSessionId=${existingSessionId ?? "null"}, toolMessages.length=${toolMessages.length}`);
+  if (toolMessages.length > 0) {
+    log(`[Session Reuse] toolMessages tool_call_ids: ${toolMessages.map(m => m.tool_call_id).join(", ")}`);
+  }
+
   let sessionId = existingSessionId ?? createSessionId();
   let session = existingSessionId ? sessionMap.get(existingSessionId) : undefined;
+  
+  log(`[Session Reuse] sessionId=${sessionId}, session found=${!!session}, sessionMap.size=${sessionMap.size}`);
+
+  // IMPORTANT: bidiAppend tool results don't trigger server continuation - start fresh request instead
+  if (toolMessages.length > 0 && session) {
+    log(`[Session Reuse] Tool messages present - closing old session ${sessionId} and starting fresh`);
+    try {
+      await session.iterator.return?.();
+    } catch (err: unknown) {
+      log("[Session Reuse] Failed to close prior session iterator:", err);
+    }
+    sessionMap.delete(sessionId);
+    session = undefined;
+    sessionId = createSessionId();
+  }
 
   if (!session) {
+    log(`[Session Reuse] Creating NEW session ${sessionId}`);
     const iterator = client
       .chatStream({ message: prompt, model, mode: AgentMode.AGENT, tools })
       [Symbol.asyncIterator]();
@@ -508,31 +534,10 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
           encoder.encode(createSSEChunk(createStreamChunk(completionId, model, created, { role: "assistant" })))
         );
 
-        if (toolMessages.length > 0) {
-          const processed = await sendToolResultsToCursor(session, toolMessages);
-          if (!processed) {
-            log(
-              `[OpenAI Compat] No pending execs matched for session ${sessionId}; restarting with fresh request body`
-            );
-
-            try {
-              await session.iterator.return?.();
-            } catch (err: unknown) {
-              log("[OpenAI Compat] Failed to close prior session iterator:", err);
-            }
-
-            const iterator = client
-              .chatStream({ message: prompt, model, mode: AgentMode.AGENT, tools })
-              [Symbol.asyncIterator]();
-
-            session.iterator = iterator;
-            session.pendingExecs.clear();
-            session.state = "running";
-          }
-        }
-
         while (!isClosed) {
+          log(`[OpenAI Compat] Waiting for next chunk from iterator for session ${sessionId}...`);
           const { done, value } = await session.iterator.next();
+          log(`[OpenAI Compat] Iterator returned: done=${done}, value type=${(value as { type?: string })?.type || 'N/A'}`);
 
           if (done) {
             sessionMap.delete(sessionId);
@@ -637,7 +642,9 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
             const { toolName, toolArgs } = mapExecRequestToTool(execReq);
             if (toolName && toolArgs) {
               const currentIndex = mcpToolCallIndex++;
-              const toolCallId = makeToolCallId(sessionId, selectCallBase(execReq));
+              const callBase = selectCallBase(execReq);
+              const toolCallId = makeToolCallId(sessionId, callBase);
+              log(`[Session ${sessionId}] Storing pendingExec: toolCallId=${toolCallId}, callBase=${callBase}, execReq.type=${execReq.type}, execReq.execId=${(execReq as { execId?: string }).execId ?? "undefined"}, execReq.id=${(execReq as { id?: number }).id ?? "undefined"}`);
               session.pendingExecs.set(toolCallId, execReq);
               session.state = "waiting_tool";
               session.lastActivity = Date.now();

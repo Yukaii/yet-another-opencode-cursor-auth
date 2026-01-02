@@ -186,6 +186,10 @@ export async function sendToolResultsToCursor(
   for (const message of toolMessages) {
     if (!message.tool_call_id) continue;
 
+    console.log(
+      `[Session ${session.id}] Looking up tool_call_id=${message.tool_call_id}, available keys=[${Array.from(session.pendingExecs.keys()).join(", ")}]`
+    );
+
     const execReq = session.pendingExecs.get(message.tool_call_id);
     if (!execReq) {
       console.warn(
@@ -277,12 +281,9 @@ export async function sendToolResultsToCursor(
   if (processedAny) {
     session.state = "running";
     session.lastActivity = Date.now();
-
-    try {
-      await session.client.sendResumeAction?.();
-    } catch (err) {
-      console.warn(`[Session ${session.id}] Failed to send ResumeAction:`, err);
-    }
+    console.log(`[Session ${session.id}] processedAny=true, tool results sent. Waiting for server to continue...`);
+  } else {
+    console.log(`[Session ${session.id}] processedAny=false, no matching tool results found`);
   }
 
   return processedAny;

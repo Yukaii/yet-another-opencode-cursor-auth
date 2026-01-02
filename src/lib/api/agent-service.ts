@@ -294,6 +294,13 @@ export class AgentServiceClient {
       const blobAnalysis = analyzeBlobData(kvMsg.blobData);
       debugLog(`[KV-BLOB] SET id=${kvMsg.id}, key=${key.slice(0, 16)}..., size=${kvMsg.blobData.length}b, type=${blobAnalysis.type}`);
       
+      if (blobAnalysis.type === 'json' && blobAnalysis.json) {
+        const json = blobAnalysis.json as Record<string, unknown>;
+        debugLog(`[KV-BLOB] JSON keys: ${Object.keys(json).join(', ')}`);
+        if (json.role) debugLog(`[KV-BLOB] JSON role: ${json.role}`);
+        if (json.content) debugLog(`[KV-BLOB] JSON content type: ${typeof json.content}, isArray: ${Array.isArray(json.content)}`);
+      }
+      
       const extractedContent = extractAssistantContent(blobAnalysis, key);
       for (const item of extractedContent) {
         debugLog(`[KV-BLOB]   ✓ Assistant content found: ${item.content.slice(0, 100)}...`);
@@ -544,15 +551,19 @@ export class AgentServiceClient {
       throw new Error("No active chat stream - cannot send resume action");
     }
 
-    debugLog("[DEBUG] Sending ResumeAction to continue session");
+    console.log("[DEBUG] sendResumeAction called:", {
+      requestId: this.currentRequestId,
+      currentSeqno: String(this.currentAppendSeqno),
+    });
 
     const conversationAction = encodeConversationActionWithResume();
     const agentClientMessage = encodeAgentClientMessageWithConversationAction(conversationAction);
 
+    console.log("[DEBUG] Sending ResumeAction with bidiAppend...");
     await this.bidiAppend(this.currentRequestId, this.currentAppendSeqno, agentClientMessage);
     this.currentAppendSeqno++;
 
-    debugLog("[DEBUG] ResumeAction sent, new seqno:", this.currentAppendSeqno);
+    console.log("[DEBUG] ResumeAction sent successfully, new seqno:", String(this.currentAppendSeqno));
   }
 
   /**

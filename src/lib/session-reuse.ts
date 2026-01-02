@@ -1,3 +1,27 @@
+/**
+ * Session Reuse Utilities
+ * 
+ * ARCHITECTURAL NOTE:
+ * True session reuse (keeping a single bidirectional stream open across multiple
+ * OpenAI API requests) is not possible due to a fundamental mismatch:
+ * 
+ * - OpenAI API: Request/response model. Must close HTTP response to return tool_calls
+ *   to the client, then receive a new HTTP request with tool results.
+ * 
+ * - Cursor's bidirectional streaming: Keeps a single stream open. Tool execution
+ *   happens locally while the stream stays open. Results are sent via bidiAppend,
+ *   and the server continues generating automatically.
+ * 
+ * Our workaround: When tool results come back in a new request, we close any
+ * existing session and start completely fresh. The messagesToPrompt() function
+ * formats the full conversation history including prior tool calls and results,
+ * so the server has full context even though we're starting a new stream.
+ * 
+ * The session infrastructure (SessionLike, pendingExecs, etc.) is retained for:
+ * 1. Potential future improvements if we find a way to bridge the gap
+ * 2. Internal read handling during edit flows (single-request scope)
+ */
+
 import crypto from "node:crypto";
 import type { ExecRequest, McpExecRequest } from "./api/agent-service";
 
@@ -11,24 +35,6 @@ export interface OpenAIMessageLite {
   content: unknown;
   tool_calls?: OpenAIToolCallLite[];
   tool_call_id?: string;
-}
-
-export interface SessionLike {
-  id: string;
-  iterator: AsyncIterator<unknown>;
-  pendingExecs: Map<string, ExecRequest>;
-  createdAt: number;
-  lastActivity: number;
-  state: "running" | "waiting_tool";
-  client: {
-    sendToolResult: SessionClient["sendToolResult"];
-    sendShellResult: SessionClient["sendShellResult"];
-    sendReadResult: SessionClient["sendReadResult"];
-    sendLsResult: SessionClient["sendLsResult"];
-    sendGrepResult: SessionClient["sendGrepResult"];
-    sendWriteResult: SessionClient["sendWriteResult"];
-    sendResumeAction?: SessionClient["sendResumeAction"];
-  };
 }
 
 export interface SessionClient {
@@ -72,6 +78,16 @@ export interface SessionClient {
     }
   ) => Promise<void>;
   sendResumeAction?: () => Promise<void>;
+}
+
+export interface SessionLike {
+  id: string;
+  iterator: AsyncIterator<unknown>;
+  pendingExecs: Map<string, ExecRequest>;
+  createdAt: number;
+  lastActivity: number;
+  state: "running" | "waiting_tool";
+  client: SessionClient;
 }
 
 export function createSessionId(): string {
@@ -202,7 +218,7 @@ export async function sendToolResultsToCursor(
 
     try {
       if (execReq.type === "mcp") {
-        await session.client.sendToolResult(execReq as McpExecRequest & { type: "mcp" }, {
+        await session.client.sendToolResult(execReq, {
           success: { content, isError: false },
         });
       } else if (execReq.type === "shell") {

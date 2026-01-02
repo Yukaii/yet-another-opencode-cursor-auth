@@ -470,6 +470,10 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
   let pendingEditToolCall: string | null = null;
   let accumulatedContent = "";
 
+  // ARCHITECTURAL NOTE: We always start fresh requests when tool results arrive.
+  // See session-reuse.ts for detailed explanation of why true session reuse isn't possible.
+  // The session infrastructure below is retained for internal read handling and future improvements.
+  
   const existingSessionId = findSessionIdInMessages(messages);
   const toolMessages = collectToolMessages(messages);
 
@@ -525,7 +529,8 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
     sessionId = session.id;
   }
 
-  session.lastActivity = Date.now();
+  const activeSession = session;
+  activeSession.lastActivity = Date.now();
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -536,7 +541,7 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
 
         while (!isClosed) {
           log(`[OpenAI Compat] Waiting for next chunk from iterator for session ${sessionId}...`);
-          const { done, value } = await session.iterator.next();
+          const { done, value } = await activeSession.iterator.next();
           log(`[OpenAI Compat] Iterator returned: done=${done}, value type=${(value as { type?: string })?.type || 'N/A'}`);
 
           if (done) {
@@ -575,7 +580,7 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
           if (chunk.type === "text" || chunk.type === "token") {
             if (chunk.content) {
               accumulatedContent += chunk.content;
-              session.lastActivity = Date.now();
+              activeSession.lastActivity = Date.now();
               controller.enqueue(
                 encoder.encode(
                   createSSEChunk(createStreamChunk(completionId, model, created, { content: chunk.content }))
@@ -645,9 +650,9 @@ async function streamChatCompletionWithSessionReuse(params: StreamParams): Promi
               const callBase = selectCallBase(execReq);
               const toolCallId = makeToolCallId(sessionId, callBase);
               log(`[Session ${sessionId}] Storing pendingExec: toolCallId=${toolCallId}, callBase=${callBase}, execReq.type=${execReq.type}, execReq.execId=${(execReq as { execId?: string }).execId ?? "undefined"}, execReq.id=${(execReq as { id?: number }).id ?? "undefined"}`);
-              session.pendingExecs.set(toolCallId, execReq);
-              session.state = "waiting_tool";
-              session.lastActivity = Date.now();
+              activeSession.pendingExecs.set(toolCallId, execReq);
+              activeSession.state = "waiting_tool";
+              activeSession.lastActivity = Date.now();
 
               const toolCallChunk: OpenAIStreamChunk = {
                 id: completionId,

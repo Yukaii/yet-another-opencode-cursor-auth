@@ -36,5 +36,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 cursor-agent-source
 cursor-agent-restored-source-code
 
+# Reverse-engineering notes (keep local only for now)
+docs/SOURCE_RESTORE_GUIDE.md
+
 /dist
 !.opencode

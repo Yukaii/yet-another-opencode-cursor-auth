@@ -18,6 +18,7 @@
         "@opencode-ai/sdk": "^0.13.9",
         "@types/babel__generator": "^7.27.0",
         "@types/bun": "latest",
+        "typescript": "^5",
       },
       "peerDependencies": {
         "@opencode-ai/plugin": "^0.13.7",

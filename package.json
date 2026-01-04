@@ -8,32 +8,27 @@
     "type": "git",
     "url": "https://github.com/Yukaii/opencode-cursor-auth"
   },
-  "module": "src/index.ts",
-  "main": "src/index.ts",
+  "module": "dist/index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
-      "import": "./src/index.ts",
-      "types": "./src/index.ts"
-    },
-    "./storage": {
-      "import": "./src/lib/storage.ts",
-      "types": "./src/lib/storage.ts"
-    },
-    "./auth": {
-      "import": "./src/lib/auth/index.ts",
-      "types": "./src/lib/auth/index.ts"
-    },
-    "./jwt": {
-      "import": "./src/lib/utils/jwt.ts",
-      "types": "./src/lib/utils/jwt.ts"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     },
     "./plugin": {
-      "import": "./src/plugin/index.ts",
-      "types": "./src/plugin/index.ts"
+      "import": "./dist/plugin/index.js",
+      "types": "./dist/plugin/index.d.ts"
     }
   },
   "scripts": {
+    "build": "bun x tsc -p tsconfig.build.json",
     "start": "bun run src/server.ts",
     "server": "bun run src/server.ts",
     "proxy": "bun run src/server.ts",
@@ -63,7 +58,8 @@
     "@opencode-ai/plugin": "^0.13.7",
     "@opencode-ai/sdk": "^0.13.9",
     "@types/babel__generator": "^7.27.0",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^0.13.7",

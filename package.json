@@ -1,6 +1,6 @@
 {
   "name": "yet-another-opencode-cursor-auth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenAI-compatible proxy server for Cursor's AI backend with full tool calling support",
   "author": "Yukai Huang",
   "license": "MIT",

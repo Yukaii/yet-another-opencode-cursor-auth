@@ -31,6 +31,7 @@ export interface ShellExecRequest {
   id: number;
   execId?: string;
   command: string;
+  description?: string;
   cwd?: string;
 }
 

@@ -21,20 +21,23 @@ import type {
   WriteResult,
 } from "./types";
 
-function parseShellArgs(data: Uint8Array): { command: string; cwd?: string } {
+function parseShellArgs(data: Uint8Array): { command: string; description?: string; cwd?: string } {
   const fields = parseProtoFields(data);
   let command = "";
+  let description: string | undefined;
   let cwd: string | undefined;
 
   for (const field of fields) {
     if (field.fieldNumber === 1 && field.wireType === 2 && field.value instanceof Uint8Array) {
       command = new TextDecoder().decode(field.value);
     } else if (field.fieldNumber === 2 && field.wireType === 2 && field.value instanceof Uint8Array) {
+      description = new TextDecoder().decode(field.value);
+    } else if (field.fieldNumber === 3 && field.wireType === 2 && field.value instanceof Uint8Array) {
       cwd = new TextDecoder().decode(field.value);
     }
   }
 
-  return { command, cwd };
+  return { command, description, cwd };
 }
 
 function parseLsArgs(data: Uint8Array): { path: string } {
@@ -174,7 +177,7 @@ export function parseExecServerMessage(data: Uint8Array): ExecRequest | null {
       case 2:
       case 14: {
         const shellArgs = parseShellArgs(field.value);
-        result = { type: "shell", id, execId, command: shellArgs.command, cwd: shellArgs.cwd } as ShellExecRequest;
+        result = { type: "shell", id, execId, command: shellArgs.command, description: shellArgs.description, cwd: shellArgs.cwd } as ShellExecRequest;
         break;
       }
       case 3: {

@@ -95,8 +95,10 @@ export function mapExecRequestToTool(execReq: ExecRequest): {
   toolArgs: Record<string, unknown> | null;
 } {
   if (execReq.type === "shell") {
-    const toolArgs: Record<string, unknown> = { command: execReq.command };
-    if (execReq.description) toolArgs.description = execReq.description;
+    const toolArgs: Record<string, unknown> = {
+      command: execReq.command,
+      description: execReq.description || "Execute shell command",
+    };
     if (execReq.cwd) toolArgs.workdir = execReq.cwd;
     return { toolName: "bash", toolArgs };
   }

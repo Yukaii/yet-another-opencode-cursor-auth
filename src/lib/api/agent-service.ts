@@ -884,21 +884,30 @@ export class AgentServiceClient {
               const grpcStatus = Number(meta["grpc-status"] ?? "0");
 
               if (grpcStatus !== 0) {
-                const grpcMessage = meta["grpc-message"]
-                  ? decodeURIComponent(meta["grpc-message"])
-                  : "Unknown gRPC error";
+                if (grpcStatus === 8) {
+                  // RESOURCE_EXHAUSTED / usage limit: user-friendly message, or suspend when model is "auto"
+                  if (request.model === "auto") {
+                    debugLog("gRPC status 8 (usage limit) with model auto: suppressing error");
+                  } else {
+                    yield { type: "error", error: "You've hit your usage limit" };
+                  }
+                } else {
+                  const grpcMessage = meta["grpc-message"]
+                    ? decodeURIComponent(meta["grpc-message"])
+                    : "Unknown gRPC error";
 
-                const detailsBin = meta["grpc-status-details-bin"];
-                const decodedDetails = detailsBin
-                  ? decodeGrpcStatusDetailsBin(detailsBin)
-                  : undefined;
+                  const detailsBin = meta["grpc-status-details-bin"];
+                  const decodedDetails = detailsBin
+                    ? decodeGrpcStatusDetailsBin(detailsBin)
+                    : undefined;
 
-                const fullError = decodedDetails
-                  ? `${grpcMessage} (grpc-status ${grpcStatus}): ${decodedDetails}`
-                  : `${grpcMessage} (grpc-status ${grpcStatus})`;
+                  const fullError = decodedDetails
+                    ? `${grpcMessage} (grpc-status ${grpcStatus}): ${decodedDetails}`
+                    : `${grpcMessage} (grpc-status ${grpcStatus})`;
 
-                console.error("gRPC error:", fullError);
-                yield { type: "error", error: fullError };
+                  console.error("gRPC error:", fullError);
+                  yield { type: "error", error: fullError };
+                }
               }
               continue;
             }

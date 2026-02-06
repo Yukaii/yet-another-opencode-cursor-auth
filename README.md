@@ -1,5 +1,8 @@
 # OpenCode Cursor Auth
 
+[![npm stable version](https://img.shields.io/npm/v/yet-another-opencode-cursor-auth?label=npm%20stable)](https://www.npmjs.com/package/yet-another-opencode-cursor-auth)
+[![npm prerelease version](https://img.shields.io/npm/v/yet-another-opencode-cursor-auth/dev?label=npm%20prerelease%20(dev))](https://www.npmjs.com/package/yet-another-opencode-cursor-auth?activeTab=versions)
+
 > **💡 Alternative Available**
 >
 > Check out [opencode-cursor-auth](https://github.com/POSO-PocketSolutions/opencode-cursor-auth) by POSO-PocketSolutions - another implementation you may want to consider.
@@ -34,6 +37,23 @@ An OpenCode plugin that enables using Cursor's AI backend with OpenCode, featuri
 - **Dynamic Model Discovery**: Automatically fetches available models from Cursor's API
 - **Streaming Support**: Real-time streaming responses via SSE
 
+## NPM Release Channels
+
+- **Stable (`latest`)**: Published when a GitHub Release is published.
+- **Prerelease (`dev`)**: Auto-published on every push to `main` via the npm publish workflow.
+
+Install the channel you want:
+
+```bash
+# Stable release
+npm install yet-another-opencode-cursor-auth@latest
+
+# Auto-published prerelease from main
+npm install yet-another-opencode-cursor-auth@dev
+```
+
+If you want npm to always pull prerelease updates in your project, keep the dependency pinned to `@dev`.
+
 ## Quick Start with OpenCode
 
 ### 1. Configure OpenCode
@@ -44,7 +64,7 @@ Add the plugin and Cursor provider to your `opencode.json`:
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "yet-another-opencode-cursor-auth"
+    "yet-another-opencode-cursor-auth@latest"
   ],
   "provider": {
     "cursor": {
@@ -53,6 +73,12 @@ Add the plugin and Cursor provider to your `opencode.json`:
   }
 }
 ```
+
+You can pin a specific plugin channel/version using:
+
+- Stable: `"yet-another-opencode-cursor-auth@latest"`
+- Prerelease channel: `"yet-another-opencode-cursor-auth@dev"`
+- Exact version: `"yet-another-opencode-cursor-auth@0.1.1"`
 
 ### 2. Authenticate
 
